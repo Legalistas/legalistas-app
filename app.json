@@ -10,21 +10,33 @@
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+      "backgroundColor": "#09A4B5"
     },
     "ios": {
+      "bundleIdentifier": "com.lexiatechs.legalistas",
       "supportsTablet": true
     },
     "android": {
+      "package": "com.lexiatechs.legalistas",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
+        "backgroundColor": "#09A4B5"
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "plugins": [
+      "@react-native-community/datetimepicker",
+      "expo-font"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "9b07e3e4-43c1-4a0e-b46f-b0fdde542298"
+      }
+    },
+    "owner": "legalistaswebs-organization"
   }
 }
