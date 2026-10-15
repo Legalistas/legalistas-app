@@ -102,3 +102,6 @@ coverage/
 # Build outputs
 build/
 output/
+
+# Claude Code (local)
+.claude/settings.local.json

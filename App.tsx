@@ -1,88 +1,112 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
+import { Platform } from "react-native";
 import * as SplashScreen from "expo-splash-screen";
+import { StatusBar } from "expo-status-bar";
 import { NavigationContainer } from "@react-navigation/native";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { useFonts } from 'expo-font';
+import { QueryClientProvider } from "@tanstack/react-query";
 import { AuthProvider, useAuth } from "./src/context/AuthContext";
 import Onboarding from "./src/screens/Onboarding";
 import RootStack from "./src/navigation/RootStack";
+import ForceUpdateScreen from "./src/screens/ForceUpdateScreen";
+import Constants from 'expo-constants';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { initOneSignal, attachPushClickListener, setPushClickHandler } from './src/utils/onesignal';
+import { navigationRef, navigate } from './src/navigation/navigationRef';
+import { Toasts } from './src/components/ui/Toast';
+import { BACKEND_URL, fetchWithTimeout } from './src/config/api';
+import { queryClient } from './src/services/query';
+import { iniciarTema } from './src/styles/tema';
+
+import "./global.css"
 
 SplashScreen.preventAutoHideAsync();
+initOneSignal();
+attachPushClickListener();
+iniciarTema();
 
-// Componente interno que tiene acceso al AuthContext
+function compareVersions(current: string, minimum: string): boolean {
+  const curr = current.split('.').map(Number);
+  const min = minimum.split('.').map(Number);
+  for (let i = 0; i < Math.max(curr.length, min.length); i++) {
+    const c = curr[i] || 0;
+    const m = min[i] || 0;
+    if (c < m) return false;
+    if (c > m) return true;
+  }
+  return true;
+}
+
 function AppContent() {
   const [firstLaunch, setFirstLaunch] = useState<boolean | null>(null);
+  const [needsUpdate, setNeedsUpdate] = useState(false);
   const { loading } = useAuth();
 
-  const [fontsLoaded] = useFonts({
-    'Inter-Regular': require('./assets/fonts/Inter-Regular.ttf'),
-    'Inter-Medium': require('./assets/fonts/Inter-Medium.ttf'),
-    'Inter-SemiBold': require('./assets/fonts/Inter-SemiBold.ttf'),
-    'Inter-Bold': require('./assets/fonts/Inter-Bold.ttf'),
-  });
-
   useEffect(() => {
-    console.log('🔍 AppContent: Checking first launch...');
-    const checkFirstLaunch = async () => {
-      try {
-        const hasSeenOnboarding = await AsyncStorage.getItem('hasSeenOnboarding');
-        console.log('📱 hasSeenOnboarding:', hasSeenOnboarding);
-        setFirstLaunch(hasSeenOnboarding === null);
-        console.log('🎯 firstLaunch set to:', hasSeenOnboarding === null);
-      } catch (error) {
-        console.log('❌ Error checking onboarding status:', error);
-        setFirstLaunch(true);
-      }
-    };
-
-    checkFirstLaunch();
+    let active = true;
+    AsyncStorage.getItem('hasSeenOnboarding')
+      .then(value => { if (active) setFirstLaunch(value === null); })
+      .catch(() => { if (active) setFirstLaunch(true); });
+    return () => { active = false; };
   }, []);
 
-  // Efecto para ocultar splash cuando todo esté listo
+  // Chequeo de versión mínima contra el backend
   useEffect(() => {
-    const hideSplash = async () => {
-      if (!loading && firstLaunch !== null && fontsLoaded) {
-        console.log('🎉 Everything ready! Hiding splash screen...');
-        // Pequeño delay para asegurar que el render esté completo
-        setTimeout(async () => {
-          await SplashScreen.hideAsync();
-          console.log('✅ Splash hidden successfully!');
-        }, 100);
-      }
-    };
+    let active = true;
+    const currentVersion = Constants.expoConfig?.version || "0.0.0";
 
-    hideSplash();
-  }, [loading, firstLaunch, fontsLoaded]);
+    fetchWithTimeout(`${BACKEND_URL}/api/v1/app/version-check`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ platform: Platform.OS, currentVersion }),
+    })
+      .then(response => response.json())
+      .then(response => {
+        const minVersion = response?.data?.minVersion;
+        if (active && minVersion) setNeedsUpdate(!compareVersions(currentVersion, minVersion));
+      })
+      .catch(() => {
+        // Si falla el check, no bloquear la app
+      });
 
-  console.log('🚀 AppContent render - loading:', loading, 'firstLaunch:', firstLaunch, 'fontsLoaded:', fontsLoaded);
+    return () => { active = false; };
+  }, []);
 
-  if (!fontsLoaded) {
-    return null;
-  }
-
-  console.log('🚀 AppContent render - loading:', loading, 'firstLaunch:', firstLaunch);
+  useEffect(() => {
+    if (!loading && firstLaunch !== null) {
+      const timer = setTimeout(() => SplashScreen.hideAsync(), 100);
+      return () => clearTimeout(timer);
+    }
+  }, [loading, firstLaunch]);
 
   const handleFinishOnboarding = async () => {
-    console.log('✅ Finishing onboarding...');
     try {
       await AsyncStorage.setItem('hasSeenOnboarding', 'true');
-      setFirstLaunch(false);
-    } catch (error) {
-      console.log('❌ Error saving onboarding status:', error);
-      setFirstLaunch(false);
-    }
+    } catch {}
+    setFirstLaunch(false);
   };
 
-  // Si algo está cargando, mantener splash
-  if (loading || firstLaunch === null) {
-    console.log('⏳ Still loading... loading:', loading, 'firstLaunch:', firstLaunch);
-    return null;
-  }
+  if (loading || firstLaunch === null) return null;
 
-  console.log('🏁 Rendering navigation - firstLaunch:', firstLaunch);
+  if (needsUpdate) return <ForceUpdateScreen />;
 
   return (
-    <NavigationContainer>
+    <NavigationContainer
+      ref={navigationRef}
+      onReady={() => {
+        setPushClickHandler((data) => {
+          const consultationId = data.consultationId != null ? Number(data.consultationId) : null;
+          const caseId = data.caseId != null ? Number(data.caseId) : null;
+
+          if (consultationId && Number.isFinite(consultationId)) {
+            navigate('ConsultationDetail', { consultationId });
+          } else if (caseId && Number.isFinite(caseId)) {
+            navigate('CaseDetail', { caseId });
+          }
+        });
+      }}
+    >
       {firstLaunch
         ? <Onboarding onFinish={handleFinishOnboarding} />
         : <RootStack />
@@ -93,8 +117,16 @@ function AppContent() {
 
 export default function App() {
   return (
-    <AuthProvider>
-      <AppContent />
-    </AuthProvider>
+    <SafeAreaProvider>
+      <GestureHandlerRootView style={{ flex: 1 }}>
+        <StatusBar style="light" />
+        <QueryClientProvider client={queryClient}>
+          <AuthProvider>
+            <AppContent />
+          </AuthProvider>
+        </QueryClientProvider>
+        <Toasts />
+      </GestureHandlerRootView>
+    </SafeAreaProvider>
   );
 }

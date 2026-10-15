@@ -11,4 +11,12 @@
 -keep class com.swmansion.reanimated.** { *; }
 -keep class com.facebook.react.turbomodule.** { *; }
 
+# OpenTelemetry - missing AutoValue annotations at compile time
+-dontwarn com.google.auto.value.**
+-dontwarn io.opentelemetry.**
+
+# Keep OpenTelemetry classes that reference AutoValue
+-keep class io.opentelemetry.sdk.logs.** { *; }
+-keep class io.opentelemetry.sdk.** { *; }
+
 # Add any project specific keep options here:

@@ -1,371 +1,138 @@
-import React, { useEffect, useState } from "react";
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator, TextInput } from 'react-native';
-import { Ionicons } from "@expo/vector-icons";
-import { typography } from "../styles/typography";
-import ApiService from "../services/ApiService";
-import { formatDateWithTime, getRelativeTime } from "../utils/formatters";
+import { type RouteProp, useRoute } from "@react-navigation/native";
+import { useState } from "react";
+import { ActivityIndicator, Pressable, Text, TextInput, View } from "react-native";
+import { Pantalla } from "../components/Encabezado";
+import { CargandoLista, ErrorCarga } from "../components/ui/Estados";
+import { Icono } from "../components/ui/Icono";
+import { Avatar, Insignia } from "../components/ui/Tarjeta";
+import type { RootStackParamList } from "../navigation/RootStack";
+import { useCaso, useConsulta, useEnviarMensaje } from "../services/consultas";
+import { useColores } from "../styles/tema";
+import { ESTADOS_CONSULTA } from "../utils/constantes";
+import { cx } from "../utils/cx";
+import { formatoFechaHora } from "../utils/formato";
 
-interface ConsultationDetailProps {
-    consultationId: string | number;
-    onBack: () => void;
-}
+// Conversación con el abogado. Busca respuestas nuevas cada 20 s mientras está
+// en pantalla.
+export default function ConsultationDetailScreen() {
+    const { params } = useRoute<RouteProp<RootStackParamList, "ConsultationDetail">>();
+    const consultaId = Number(params.consultationId);
+    const c = useColores();
+    const consulta = useConsulta(consultaId);
+    const enviar = useEnviarMensaje(consultaId);
+    const [texto, setTexto] = useState("");
 
-const ConsultationDetailScreen: React.FC<ConsultationDetailProps> = ({ consultationId, onBack }) => {
-    const [consultation, setConsultation] = useState<any>(null);
-    const [loading, setLoading] = useState(true);
-    const [error, setError] = useState<string | null>(null);
-    const [messageInput, setMessageInput] = useState("");
+    const mandar = () => {
+        const limpio = texto.trim();
+        if (!limpio || enviar.isPending) return;
+        enviar.mutate(limpio, { onSuccess: () => setTexto("") });
+    };
 
-    useEffect(() => {
-        const fetchConsultation = async () => {
-            setLoading(true);
-            setError(null);
-            try {
-                const res = await ApiService.getConsultationById(consultationId);
-                if (res.success && res.data) {
-                    setConsultation(res.data);
-                } else {
-                    setError(res.error || "No se pudo cargar la consulta");
-                }
-            } catch (e: any) {
-                setError(e.message || "Error de red");
-            } finally {
-                setLoading(false);
-            }
-        };
-        fetchConsultation();
-    }, [consultationId]);
-
-    if (loading) {
-        return (
-            <View style={styles.container}>
-                <View style={styles.header}>
-                    <TouchableOpacity onPress={onBack} style={styles.backButton}>
-                        <Ionicons name="arrow-back" size={24} color="#fff" />
-                    </TouchableOpacity>
-                    <Text style={styles.headerTitle}>Consulta</Text>
-                </View>
-                <View style={styles.loadingContainer}>
-                    <ActivityIndicator size="large" color="#09A4B5" />
-                    <Text style={styles.loadingText}>Cargando consulta...</Text>
-                </View>
-            </View>
-        );
-    }
-
-    if (error || !consultation) {
-        return (
-            <View style={styles.container}>
-                <View style={styles.header}>
-                    <TouchableOpacity onPress={onBack} style={styles.backButton}>
-                        <Ionicons name="arrow-back" size={24} color="#fff" />
-                    </TouchableOpacity>
-                    <Text style={styles.headerTitle}>Consulta</Text>
-                </View>
-                <View style={styles.errorContainer}>
-                    <Ionicons name="alert-circle" size={48} color="#e11d48" />
-                    <Text style={styles.errorText}>{error || "Consulta no encontrada"}</Text>
-                </View>
-            </View>
-        );
-    }
-
-    const isClosed = consultation.status === 'CLOSED';
-    const messages = consultation.messages || [];
+    const datos = consulta.data;
+    // El abogado sale del caso (si se viene del caso, ya está en caché).
+    const abogado = useCaso(datos?.caso.id ?? 0).data?.abogado;
+    const estado = datos ? ESTADOS_CONSULTA[datos.estado] : null;
 
     return (
-        <View style={styles.container}>
-            {/* Header */}
-            <View style={styles.header}>
-                <TouchableOpacity onPress={onBack} style={styles.backButton}>
-                    <Ionicons name="arrow-back" size={24} color="#fff" />
-                </TouchableOpacity>
-                <View style={styles.headerContent}>
-                    <Text style={styles.headerTitle}>{consultation.title}</Text>
-                    <View style={styles.statusBadge}>
-                        <View style={[
-                            styles.statusDot,
-                            { backgroundColor: isClosed ? '#94a3b8' : '#10b981' }
-                        ]} />
-                        <Text style={styles.statusText}>
-                            {isClosed ? 'Cerrado' : 'En curso'}
-                        </Text>
+        <Pantalla
+            irAlFinal
+            volver="Volver al caso"
+            antetitulo={datos?.caso.titulo}
+            titulo={datos?.titulo ?? "Consulta"}
+            encabezado={
+                estado ? (
+                    <View className="mt-3 flex-row flex-wrap items-center gap-2">
+                        <Insignia color={estado.color} fondo={estado.fondo}>
+                            {estado.nombre}
+                        </Insignia>
+                        <Text className="text-base text-slate-300">{estado.explicacion}</Text>
                     </View>
-                </View>
-            </View>
-
-            {/* Messages */}
-            <ScrollView
-                style={styles.messagesContainer}
-                contentContainerStyle={styles.messagesContent}
-                showsVerticalScrollIndicator={false}
-            >
-                {messages.length === 0 ? (
-                    <View style={styles.emptyState}>
-                        <Ionicons name="chatbubbles-outline" size={64} color="#cbd5e1" />
-                        <Text style={styles.emptyText}>No hay mensajes en esta consulta</Text>
-                    </View>
+                ) : null
+            }
+            pie={
+                datos?.estado === "CLOSED" ? (
+                    <Text className="rounded-2xl border border-borde bg-superficie p-4 text-center text-base text-texto-suave">
+                        Esta consulta terminó. Si tenés otra duda, hacé una consulta nueva desde tu caso.
+                    </Text>
                 ) : (
-                    messages.map((message: any, idx: number) => {
-                        const isCustomer = message.sender === 'customer';
-                        const isResponsible = message.sender === 'responsible';
-
-                        return (
+                    <View className="flex-row items-end gap-2 rounded-3xl border border-borde bg-superficie p-2 shadow-barra">
+                        <TextInput
+                            accessibilityLabel="Escribí tu mensaje"
+                            multiline
+                            value={texto}
+                            onChangeText={setTexto}
+                            maxLength={2000}
+                            placeholder="Escribí tu mensaje…"
+                            placeholderTextColor={c.textoTenue}
+                            editable={Boolean(datos)}
+                            className="max-h-40 min-h-12 flex-1 rounded-2xl bg-superficie-2 px-4 py-3 text-[16px] text-texto"
+                        />
+                        <Pressable
+                            accessibilityRole="button"
+                            accessibilityLabel="Enviar mensaje"
+                            disabled={!texto.trim() || enviar.isPending}
+                            onPress={mandar}
+                            className={cx(
+                                "size-12 items-center justify-center rounded-full bg-brand active:opacity-80",
+                                (!texto.trim() || enviar.isPending) && "opacity-60",
+                            )}
+                        >
+                            {enviar.isPending ? (
+                                <ActivityIndicator color={c.ink} />
+                            ) : (
+                                <Icono nombre="send" tono="ink" size={20} />
+                            )}
+                        </Pressable>
+                    </View>
+                )
+            }
+        >
+            {consulta.isPending ? (
+                <CargandoLista filas={3} etiqueta="Cargando la conversación…" />
+            ) : consulta.isError ? (
+                <ErrorCarga mensaje={consulta.error.message} alReintentar={() => consulta.refetch()} />
+            ) : (
+                <View accessibilityLiveRegion="polite" className="gap-4">
+                    {consulta.data.mensajes.map((m) => (
+                        <View
+                            key={m.id}
+                            className={cx("flex-row items-end gap-2", m.deCliente ? "justify-end" : "justify-start")}
+                        >
+                            {!m.deCliente && abogado ? (
+                                <Avatar nombre={abogado.nombre} imagen={abogado.imagen} px={36} />
+                            ) : null}
                             <View
-                                key={message.id || idx}
-                                style={[
-                                    styles.messageCard,
-                                    isCustomer && styles.messageCustomer,
-                                    isResponsible && styles.messageResponsible
-                                ]}
+                                className={cx(
+                                    "max-w-[85%] rounded-2xl px-4 py-3",
+                                    m.deCliente
+                                        ? "rounded-br-md bg-brand"
+                                        : "rounded-bl-md border border-borde bg-superficie",
+                                )}
                             >
-                                <View style={styles.messageHeader}>
-                                    <View style={styles.senderInfo}>
-                                        <Ionicons
-                                            name={isResponsible ? 'briefcase' : 'person'}
-                                            size={16}
-                                            color={isResponsible ? '#09A4B5' : '#64748b'}
-                                        />
-                                        <Text style={[
-                                            styles.senderName,
-                                            isResponsible && styles.senderNameResponsible
-                                        ]}>
-                                            {isResponsible ? 'Abogado Responsable' : 'Tú'}
-                                        </Text>
-                                    </View>
-                                    <Text style={styles.messageTime}>
-                                        {getRelativeTime(message.timestamp)}
-                                    </Text>
-                                </View>
-                                <Text style={styles.messageContent}>{message.content}</Text>
-                                <Text style={styles.messageTimestamp}>
-                                    {formatDateWithTime(message.timestamp)}
+                                <Text
+                                    className={cx(
+                                        "font-semibold text-sm",
+                                        m.deCliente ? "text-ink-50" : "text-texto-marca",
+                                    )}
+                                >
+                                    {m.deCliente ? "Vos" : (abogado?.nombre ?? "Tu abogado")}
+                                </Text>
+                                <Text className={cx("mt-1 text-base", m.deCliente ? "text-ink" : "text-texto")}>
+                                    {m.texto}
+                                </Text>
+                                <Text
+                                    className={cx(
+                                        "mt-1.5 text-xs",
+                                        m.deCliente ? "text-ink-50" : "text-texto-tenue",
+                                    )}
+                                >
+                                    {formatoFechaHora(m.fecha)}
                                 </Text>
                             </View>
-                        );
-                    })
-                )}
-                <View style={{ height: 120 }} />
-            </ScrollView>
-
-            {/* Input Area - Only if not closed */}
-            {!isClosed && (
-                <View style={styles.inputContainer}>
-                    <TextInput
-                        style={styles.input}
-                        placeholder="Escribe tu mensaje..."
-                        placeholderTextColor="#94a3b8"
-                        value={messageInput}
-                        onChangeText={setMessageInput}
-                        multiline
-                        maxLength={500}
-                    />
-                    <TouchableOpacity
-                        style={[
-                            styles.sendButton,
-                            !messageInput.trim() && styles.sendButtonDisabled
-                        ]}
-                        disabled={!messageInput.trim()}
-                    >
-                        <Ionicons name="send" size={20} color="#fff" />
-                    </TouchableOpacity>
+                        </View>
+                    ))}
                 </View>
             )}
-
-            {isClosed && (
-                <View style={styles.closedBanner}>
-                    <Ionicons name="lock-closed" size={20} color="#64748b" />
-                    <Text style={styles.closedText}>Esta consulta está cerrada</Text>
-                </View>
-            )}
-        </View>
+        </Pantalla>
     );
-};
-
-const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: '#f8fafc',
-    },
-    header: {
-        backgroundColor: '#1C2434',
-        paddingHorizontal: 20,
-        paddingTop: 60,
-        paddingBottom: 20,
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 16,
-    },
-    backButton: {
-        width: 40,
-        height: 40,
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    headerContent: {
-        flex: 1,
-    },
-    headerTitle: {
-        ...typography.h4,
-        color: '#ffffff',
-        marginBottom: 8,
-    },
-    statusBadge: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 6,
-    },
-    statusDot: {
-        width: 8,
-        height: 8,
-        borderRadius: 4,
-    },
-    statusText: {
-        ...typography.caption,
-        color: '#94a3b8',
-    },
-    loadingContainer: {
-        flex: 1,
-        justifyContent: 'center',
-        alignItems: 'center',
-        gap: 16,
-    },
-    loadingText: {
-        ...typography.h6,
-        color: '#64748b',
-    },
-    errorContainer: {
-        flex: 1,
-        justifyContent: 'center',
-        alignItems: 'center',
-        paddingHorizontal: 40,
-        gap: 16,
-    },
-    errorText: {
-        ...typography.h6,
-        color: '#e11d48',
-        textAlign: 'center',
-    },
-    messagesContainer: {
-        flex: 1,
-    },
-    messagesContent: {
-        paddingHorizontal: 20,
-        paddingTop: 20,
-    },
-    emptyState: {
-        flex: 1,
-        justifyContent: 'center',
-        alignItems: 'center',
-        paddingVertical: 80,
-        gap: 16,
-    },
-    emptyText: {
-        fontSize: 16,
-        color: '#94a3b8',
-        textAlign: 'center',
-    },
-    messageCard: {
-        backgroundColor: '#ffffff',
-        borderRadius: 16,
-        padding: 16,
-        marginBottom: 12,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.05,
-        shadowRadius: 4,
-        elevation: 1,
-    },
-    messageCustomer: {
-        backgroundColor: '#f0f9fa',
-        borderLeftWidth: 3,
-        borderLeftColor: '#09A4B5',
-    },
-    messageResponsible: {
-        backgroundColor: '#ffffff',
-        borderLeftWidth: 3,
-        borderLeftColor: '#e2e8f0',
-    },
-    messageHeader: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        marginBottom: 8,
-    },
-    senderInfo: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 6,
-    },
-    senderName: {
-        ...typography.caption,
-        color: '#64748b',
-    },
-    senderNameResponsible: {
-        color: '#09A4B5',
-    },
-    messageTime: {
-        ...typography.captionSmall,
-        color: '#94a3b8',
-    },
-    messageContent: {
-        ...typography.body,
-        color: '#1C2434',
-        lineHeight: 22,
-        marginBottom: 6,
-    },
-    messageTimestamp: {
-        ...typography.captionSmall,
-        color: '#94a3b8',
-    },
-    inputContainer: {
-        backgroundColor: '#ffffff',
-        paddingHorizontal: 20,
-        paddingVertical: 16,
-        flexDirection: 'row',
-        alignItems: 'flex-end',
-        gap: 12,
-        borderTopWidth: 1,
-        borderTopColor: '#e2e8f0',
-    },
-    input: {
-        ...typography.body,
-        flex: 1,
-        backgroundColor: '#f8fafc',
-        borderRadius: 24,
-        paddingHorizontal: 20,
-        paddingVertical: 12,
-        color: '#1C2434',
-        maxHeight: 100,
-        borderWidth: 1,
-        borderColor: '#e2e8f0',
-    },
-    sendButton: {
-        width: 48,
-        height: 48,
-        borderRadius: 24,
-        backgroundColor: '#09A4B5',
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    sendButtonDisabled: {
-        backgroundColor: '#cbd5e1',
-    },
-    closedBanner: {
-        backgroundColor: '#f1f5f9',
-        paddingVertical: 16,
-        paddingHorizontal: 20,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 8,
-        borderTopWidth: 1,
-        borderTopColor: '#e2e8f0',
-    },
-    closedText: {
-        ...typography.bodySmall,
-        color: '#64748b',
-    },
-});
-
-export default ConsultationDetailScreen;
+}

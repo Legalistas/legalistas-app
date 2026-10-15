@@ -1,0 +1,85 @@
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/preflight.css" layer(base);
+@import "tailwindcss/utilities.css";
+
+@import "nativewind/theme";
+
+/*
+ * Tema de la app: el mismo del portal de clientes (legalistas-clientes,
+ * src/app/globals.css). `ink` (navy) y `brand` (#21ADBC). Las pantallas usan
+ * tokens SEMÁNTICOS (fondo, superficie, texto, borde…) que cambian solos con
+ * el modo oscuro. Los mismos valores están en src/styles/tema.ts para lo que
+ * necesita el color en JS (íconos, placeholders).
+ *
+ * Contraste: el brand #21ADBC con texto blanco da 2,7:1 (no pasa AA). Sobre
+ * brand va texto ink (7,2:1); el texto de color de marca usa `texto-marca`.
+ */
+@theme {
+  --color-ink: #091018;
+  --color-ink-50: #1e314a;
+  --color-ink-100: #152437;
+  --color-ink-200: #0f1a26;
+  --color-ink-700: #131f2e;
+  --color-ink-800: #0f1a26;
+  --color-ink-900: #091018;
+  --color-ink-950: #05080d;
+
+  --color-brand: #21adbc;
+  --color-brand-50: #e8f8fa;
+  --color-brand-100: #c5eef2;
+  --color-brand-200: #8ddde6;
+  --color-brand-300: #55ccd9;
+  --color-brand-400: #21adbc;
+  --color-brand-500: #1c95a2;
+  --color-brand-600: #177682;
+  --color-brand-700: #115863;
+
+  --shadow-tarjeta: 0 2px 8px rgb(9 16 24 / 0.06);
+  --shadow-barra: 0 6px 16px rgb(9 16 24 / 0.12);
+  --shadow-marca: 0 6px 12px rgb(33 173 188 / 0.35);
+}
+
+/* Semánticos: los valores reales viven en :root y se pisan en modo oscuro. */
+@theme inline {
+  --color-fondo: var(--fondo);
+  --color-superficie: var(--superficie);
+  --color-superficie-2: var(--superficie-2);
+  --color-texto: var(--texto);
+  --color-texto-suave: var(--texto-suave);
+  --color-texto-tenue: var(--texto-tenue);
+  --color-texto-marca: var(--texto-marca);
+  --color-borde: var(--borde);
+  --color-borde-fuerte: var(--borde-fuerte);
+  --color-marca-suave: var(--marca-suave);
+  --color-foco: var(--foco);
+}
+
+:root {
+  --fondo: #f8fafc;
+  --superficie: #ffffff;
+  --superficie-2: #f1f5f9;
+  --texto: #091018;
+  --texto-suave: #475569;
+  --texto-tenue: #64748b;
+  --texto-marca: #115863;
+  --borde: #e2e8f0;
+  --borde-fuerte: #cbd5e1;
+  --marca-suave: #e8f8fa;
+  --foco: #115863;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fondo: #091018;
+    --superficie: #0f1a26;
+    --superficie-2: #152437;
+    --texto: #ffffff;
+    --texto-suave: #cbd5e1;
+    --texto-tenue: #94a3b8;
+    --texto-marca: #55ccd9;
+    --borde: #1e314a;
+    --borde-fuerte: #2c4563;
+    --marca-suave: #152437;
+    --foco: #55ccd9;
+  }
+}

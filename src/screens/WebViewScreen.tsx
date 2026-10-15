@@ -1,140 +1,80 @@
 import React, { useState } from "react";
-import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
+import { View, Text, Pressable, ActivityIndicator } from 'react-native';
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { WebView } from 'react-native-webview';
-import { Ionicons } from "@expo/vector-icons";
-import { typography } from "../styles/typography";
+import { useNavigation, useRoute, RouteProp } from "@react-navigation/native";
+import { RootStackParamList } from "../navigation/RootStack";
+import { Boton } from "../components/ui/Boton";
+import { Icono } from "../components/ui/Icono";
+import { useColores } from "../styles/tema";
 
-interface WebViewScreenProps {
-    url: string;
-    title: string;
-    onBack: () => void;
-}
-
-const WebViewScreen: React.FC<WebViewScreenProps> = ({ url, title, onBack }) => {
-    const [loading, setLoading] = useState(true);
+const WebViewScreen = () => {
+    const navigation = useNavigation();
+    const insets = useSafeAreaInsets();
+    const c = useColores();
+    const route = useRoute<RouteProp<RootStackParamList, 'WebView'>>();
+    const { url, title } = route.params;
     const [error, setError] = useState(false);
+    // Cambiar la clave vuelve a cargar la página ("Reintentar").
+    const [intento, setIntento] = useState(0);
 
     return (
-        <View style={styles.container}>
+        <View className="flex-1 bg-fondo">
             {/* Header */}
-            <View style={styles.header}>
-                <TouchableOpacity onPress={onBack} style={styles.backButton}>
-                    <Ionicons name="arrow-back" size={24} color="#fff" />
-                </TouchableOpacity>
-                <Text style={styles.headerTitle} numberOfLines={1}>{title}</Text>
-                <View style={{ width: 40 }} />
+            <View
+                className="flex-row items-center gap-2 bg-ink px-3 pb-3"
+                style={{ paddingTop: insets.top + 8 }}
+            >
+                <Pressable
+                    onPress={() => navigation.goBack()}
+                    accessibilityRole="button"
+                    accessibilityLabel="Volver"
+                    className="size-11 items-center justify-center rounded-full active:bg-white/10"
+                >
+                    <Icono nombre="chevron-back" tono="blanco" />
+                </Pressable>
+                <Text
+                    accessibilityRole="header"
+                    className="flex-1 font-bold text-lg text-white"
+                    numberOfLines={1}
+                >
+                    {title}
+                </Text>
             </View>
 
             {/* WebView */}
             <WebView
+                key={intento}
                 source={{ uri: url }}
-                style={styles.webview}
-                onLoadStart={() => setLoading(true)}
-                onLoadEnd={() => setLoading(false)}
-                onError={() => {
-                    setLoading(false);
-                    setError(true);
-                }}
+                style={{ flex: 1 }}
+                onError={() => setError(true)}
                 startInLoadingState={true}
                 renderLoading={() => (
-                    <View style={styles.loadingContainer}>
-                        <ActivityIndicator size="large" color="#09A4B5" />
-                        <Text style={styles.loadingText}>Cargando...</Text>
+                    <View className="absolute inset-0 items-center justify-center gap-4 bg-fondo">
+                        <ActivityIndicator size="large" color={c.textoMarca} />
+                        <Text className="font-semibold text-base text-texto-suave">Cargando...</Text>
                     </View>
                 )}
             />
 
             {error && (
-                <View style={styles.errorContainer}>
-                    <Ionicons name="alert-circle" size={48} color="#e11d48" />
-                    <Text style={styles.errorText}>No se pudo cargar la página</Text>
-                    <TouchableOpacity 
-                        style={styles.retryButton}
+                <View className="absolute inset-0 items-center justify-center gap-4 bg-fondo px-10">
+                    <Icono nombre="alert-circle-outline" tono="rojo" size={48} />
+                    <Text className="text-center text-base text-texto">No se pudo cargar la página</Text>
+                    <Boton
+                        className="self-center"
+                        icono="refresh"
                         onPress={() => {
                             setError(false);
-                            setLoading(true);
+                            setIntento((n) => n + 1);
                         }}
                     >
-                        <Text style={styles.retryButtonText}>Reintentar</Text>
-                    </TouchableOpacity>
+                        Reintentar
+                    </Boton>
                 </View>
             )}
         </View>
     );
 };
-
-const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: '#f8fafc',
-    },
-    header: {
-        backgroundColor: '#1C2434',
-        paddingHorizontal: 20,
-        paddingTop: 60,
-        paddingBottom: 20,
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 16,
-    },
-    backButton: {
-        width: 40,
-        height: 40,
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    headerTitle: {
-        ...typography.h5,
-        color: '#ffffff',
-        flex: 1,
-    },
-    webview: {
-        flex: 1,
-    },
-    loadingContainer: {
-        position: 'absolute',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        justifyContent: 'center',
-        alignItems: 'center',
-        backgroundColor: '#f8fafc',
-        gap: 16,
-    },
-    loadingText: {
-        ...typography.h6,
-        color: '#64748b',
-    },
-    errorContainer: {
-        position: 'absolute',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        justifyContent: 'center',
-        alignItems: 'center',
-        backgroundColor: '#f8fafc',
-        paddingHorizontal: 40,
-        gap: 16,
-    },
-    errorText: {
-        fontSize: 16,
-        color: '#e11d48',
-        textAlign: 'center',
-    },
-    retryButton: {
-        backgroundColor: '#09A4B5',
-        paddingVertical: 12,
-        paddingHorizontal: 24,
-        borderRadius: 8,
-        marginTop: 8,
-    },
-    retryButtonText: {
-        fontSize: 15,
-        fontWeight: '600',
-        color: '#ffffff',
-    },
-});
 
 export default WebViewScreen;

@@ -1,10 +1,12 @@
 import React, { forwardRef, useImperativeHandle, useState, useRef } from "react";
 import { View, ScrollView, Dimensions } from "react-native";
+import type { NativeSyntheticEvent, NativeScrollEvent, ViewStyle } from "react-native";
 
 const { width } = Dimensions.get("window");
 
 interface SimplePagerViewProps {
-  style?: any;
+  style?: ViewStyle;
+  className?: string;
   initialPage?: number;
   onPageSelected?: (event: { nativeEvent: { position: number } }) => void;
   children: React.ReactNode[];
@@ -15,7 +17,7 @@ export interface SimplePagerViewRef {
 }
 
 const SimplePagerView = forwardRef<SimplePagerViewRef, SimplePagerViewProps>(
-  ({ style, initialPage = 0, onPageSelected, children }, ref) => {
+  ({ style, className, initialPage = 0, onPageSelected, children }, ref) => {
     const [currentPage, setCurrentPage] = useState(initialPage);
     const scrollViewRef = useRef<ScrollView>(null);
 
@@ -23,14 +25,13 @@ const SimplePagerView = forwardRef<SimplePagerViewRef, SimplePagerViewProps>(
       setPage: (page: number) => {
         setCurrentPage(page);
         scrollViewRef.current?.scrollTo({ x: page * width, animated: true });
-        // Simular el evento de cambio de página
         setTimeout(() => {
           onPageSelected?.({ nativeEvent: { position: page } });
         }, 100);
       },
     }));
 
-    const handleScroll = (event: any) => {
+    const handleScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
       const { contentOffset } = event.nativeEvent;
       const page = Math.round(contentOffset.x / width);
       if (page !== currentPage) {
@@ -43,6 +44,7 @@ const SimplePagerView = forwardRef<SimplePagerViewRef, SimplePagerViewProps>(
       <ScrollView
         ref={scrollViewRef}
         style={style}
+        className={className}
         horizontal
         pagingEnabled
         showsHorizontalScrollIndicator={false}
@@ -51,8 +53,8 @@ const SimplePagerView = forwardRef<SimplePagerViewRef, SimplePagerViewProps>(
         bounces={false}
         decelerationRate="fast"
       >
-        {React.Children.map(children, (child, index) => (
-          <View key={index} style={{ width }}>
+        {React.Children.map(children, (child) => (
+          <View style={{ width }}>
             {child}
           </View>
         ))}

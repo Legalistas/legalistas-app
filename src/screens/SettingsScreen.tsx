@@ -1,1123 +1,780 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, Image, StyleSheet, TextInput, Switch, ActivityIndicator, Alert, Platform, Modal } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
-import DateTimePicker from '@react-native-community/datetimepicker';
-import { typography } from '../styles/typography';
-import ApiService from '../services/ApiService';
-import { docsType, genderType } from '../utils/constants';
+import { useNavigation } from "@react-navigation/native";
+import Constants from "expo-constants";
+import { useState } from "react";
+import { Linking, Pressable, Text, View } from "react-native";
+import { type Nav, Pantalla } from "../components/Encabezado";
+import { Boton } from "../components/ui/Boton";
+import { Campo } from "../components/ui/Campo";
+import { Interruptor, Opciones, Pestanas } from "../components/ui/Controles";
+import { CargandoLista, ErrorCarga, Esqueleto } from "../components/ui/Estados";
+import { Icono, IconoCaja, type NombreIcono } from "../components/ui/Icono";
+import { Selector } from "../components/ui/Selector";
+import { Dato, Tarjeta, TituloSeccion } from "../components/ui/Tarjeta";
+import { PORTAL_URL } from "../config/api";
+import { useAuth } from "../context/AuthContext";
+import {
+    useCerrarOtrasSesiones,
+    useCerrarSesionRemota,
+    useEliminarCuenta,
+    useGuardarPerfil,
+    usePerfiles,
+    useProvincias,
+    useSesionActual,
+    useSesiones,
+    useUltimosIngresos,
+} from "../services/consultas";
+import { queryClient } from "../services/query";
+import { cambiarTema, useTema } from "../styles/tema";
+import type { Perfil } from "../types/portal";
+import { showAlert } from "../utils/alert";
+import { CONTACTO, ESTADOS_CIVILES, GENEROS, TIPOS_DOCUMENTO } from "../utils/constantes";
+import { dispositivoDe } from "../utils/dispositivo";
+import { formatoFechaHora, haceCuanto } from "../utils/formato";
 
-interface Country {
-    id: number;
-    name: string;
-    prefix: string;
-    code: string;
-    isActive: boolean;
-    states: State[];
+type Seccion = "datos" | "domicilio" | "avisos" | "apariencia" | "ajustes";
+
+const TOTAL_DATOS = 10;
+const DE_DOMICILIO = new Set(["Calle y número", "Localidad", "Provincia", "Código postal"]);
+
+// Mi cuenta: datos personales, domicilio, avisos, apariencia y ajustes.
+export default function SettingsScreen() {
+    const perfiles = usePerfiles();
+    const { logout } = useAuth();
+    const [personaId, setPersonaId] = useState<number | null>(null);
+    const [seccion, setSeccion] = useState<Seccion>("datos");
+    const [cerrando, setCerrando] = useState(false);
+    const perfil = perfiles.data?.find((p) => p.id === personaId) ?? perfiles.data?.[0];
+
+    const faltanDatos = perfil?.faltantes.filter((f) => !DE_DOMICILIO.has(f)).length ?? 0;
+    const faltanDomicilio = perfil?.faltantes.filter((f) => DE_DOMICILIO.has(f)).length ?? 0;
+
+    return (
+        <Pantalla
+            conBarra
+            antetitulo="Mi cuenta"
+            titulo={perfil?.nombre ?? "Mi cuenta"}
+            subtitulo={perfil?.email}
+        >
+            <View className="gap-6">
+                {perfiles.data && perfiles.data.length > 1 ? (
+                    <View className="flex-row flex-wrap items-center gap-2">
+                        <Text className="text-base text-texto-suave">Datos de:</Text>
+                        {perfiles.data.map((p) => (
+                            <Boton
+                                key={p.id}
+                                tamanio="sm"
+                                variante={p.id === perfil?.id ? "primario" : "secundario"}
+                                accessibilityState={{ selected: p.id === perfil?.id }}
+                                onPress={() => setPersonaId(p.id)}
+                            >
+                                {p.nombre}
+                            </Boton>
+                        ))}
+                    </View>
+                ) : null}
+
+                {perfil ? <Completitud perfil={perfil} alIr={setSeccion} /> : null}
+
+                <Pestanas
+                    etiqueta="Secciones de mi cuenta"
+                    valor={seccion}
+                    alCambiar={setSeccion}
+                    pestanas={[
+                        {
+                            valor: "datos",
+                            texto: "Mis datos",
+                            icono: "person-circle-outline",
+                            contador: faltanDatos || undefined,
+                        },
+                        {
+                            valor: "domicilio",
+                            texto: "Domicilio",
+                            icono: "home-outline",
+                            contador: faltanDomicilio || undefined,
+                        },
+                        { valor: "avisos", texto: "Avisos", icono: "notifications-outline" },
+                        { valor: "apariencia", texto: "Apariencia", icono: "color-palette-outline" },
+                        { valor: "ajustes", texto: "Ajustes", icono: "settings-outline" },
+                    ]}
+                />
+
+                {/* La clave reinicia los formularios al cambiar de persona. */}
+                <View key={`${seccion}-${perfil?.id ?? 0}`}>
+                    {seccion === "apariencia" ? (
+                        <SeccionApariencia />
+                    ) : seccion === "ajustes" ? (
+                        <SeccionAjustes perfil={perfil} />
+                    ) : perfiles.isPending ? (
+                        <Esqueleto className="h-96" />
+                    ) : perfiles.isError ? (
+                        <ErrorCarga alReintentar={() => perfiles.refetch()} />
+                    ) : perfil ? (
+                        seccion === "datos" ? (
+                            <SeccionDatos perfil={perfil} />
+                        ) : seccion === "domicilio" ? (
+                            <SeccionDomicilio perfil={perfil} />
+                        ) : (
+                            <SeccionAvisos perfil={perfil} />
+                        )
+                    ) : null}
+                </View>
+
+                <Boton
+                    variante="peligro"
+                    tamanio="lg"
+                    ancho="completo"
+                    cargando={cerrando}
+                    icono="log-out-outline"
+                    onPress={() => {
+                        setCerrando(true);
+                        logout().finally(() => setCerrando(false));
+                    }}
+                >
+                    Cerrar sesión
+                </Boton>
+            </View>
+        </Pantalla>
+    );
 }
 
-interface State {
-    id: number;
-    countryId: number;
-    name: string;
-    isActive: boolean;
-}
-
-interface SettingsScreenProps {
-    onNavigateToAbout?: () => void;
-    onBack?: () => void;
-}
-
-const SettingsScreen: React.FC<SettingsScreenProps> = ({ onNavigateToAbout, onBack }) => {
-    const [formData, setFormData] = useState({
-        name: 'Vilella Jonatan',
-        email: 'jonatan@nextweb.com.ar',
-        image: '',
-        docType: null as number | null,
-        docNumber: '',
-        phone: '3425266717',
-        birthDate: '11/08/1990',
-        gender: null as number | null,
-        countryId: null as number | null,
-        stateId: null as number | null,
-        city: '',
-        cp: '',
-        street: '',
-        streetNumber: '',
-        description: '',
-    });
-
-    const [notifications, setNotifications] = useState({
-        push: true,
-        email: true,
-        caseUpdates: true,
-        messages: true,
-    });
-
-    const [countries, setCountries] = useState<Country[]>([]);
-    const [loading, setLoading] = useState(true);
-    const [saving, setSaving] = useState(false);
-    const [showDocumentPicker, setShowDocumentPicker] = useState(false);
-    const [showGenderPicker, setShowGenderPicker] = useState(false);
-    const [showCountryPicker, setShowCountryPicker] = useState(false);
-    const [showStatePicker, setShowStatePicker] = useState(false);
-    const [showDatePicker, setShowDatePicker] = useState(false);
-    const [datePickerDate, setDatePickerDate] = useState(new Date());
-
-    useEffect(() => {
-        loadCountries();
-    }, []);
-
-    const loadCountries = async () => {
-        try {
-            setLoading(true);
-            const response = await ApiService.getCountries();
-            if (response.success && response.data?.data) {
-                setCountries(response.data.data);
-                // Si hay países y el usuario no tiene uno seleccionado, seleccionar Argentina por defecto
-                const argentina = response.data.data.find((c: Country) => c.code === 'AR');
-                if (argentina && !formData.countryId) {
-                    setFormData(prev => ({ ...prev, countryId: argentina.id }));
-                }
-            }
-        } catch (error) {
-            console.error('Error cargando países:', error);
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    const getSelectedCountry = () => {
-        return countries.find(c => c.id === formData.countryId);
-    };
-
-    const getSelectedState = () => {
-        const country = getSelectedCountry();
-        return country?.states.find(s => s.id === formData.stateId);
-    };
-
-    const getAvailableStates = () => {
-        const country = getSelectedCountry();
-        return country?.states || [];
-    };
-
-    const getDocTypeLabel = () => {
-        const doc = docsType.find(d => d.value === formData.docType);
-        return doc?.label || 'Selecciona tipo';
-    };
-
-    const getGenderLabel = () => {
-        const gender = genderType.find(g => g.value === formData.gender);
-        return gender?.label || 'Selecciona género';
-    };
-
-    const handleDateChange = (event: any, selectedDate?: Date) => {
-        if (Platform.OS === 'android') {
-            setShowDatePicker(false);
-        }
-        
-        if (selectedDate) {
-            setDatePickerDate(selectedDate);
-            // Formatear fecha a DD/MM/AAAA
-            const day = selectedDate.getDate().toString().padStart(2, '0');
-            const month = (selectedDate.getMonth() + 1).toString().padStart(2, '0');
-            const year = selectedDate.getFullYear();
-            setFormData({ ...formData, birthDate: `${day}/${month}/${year}` });
-        }
-    };
-
-    const parseDateString = (dateString: string): Date => {
-        if (!dateString) return new Date();
-        const parts = dateString.split('/');
-        if (parts.length === 3) {
-            const day = parseInt(parts[0]);
-            const month = parseInt(parts[1]) - 1;
-            const year = parseInt(parts[2]);
-            return new Date(year, month, day);
-        }
-        return new Date();
-    };
-
-    const handleSaveChanges = async () => {
-        try {
-            setSaving(true);
-
-            const profileUpdateData = {
-                name: formData.name,
-                email: formData.email,
-                image: formData.image,
-                docType: formData.docType,
-                docNumber: formData.docNumber,
-                gender: formData.gender,
-                birthDate: formData.birthDate,
-                phone: formData.phone,
-                address: {
-                    countryId: formData.countryId || 0,
-                    stateId: formData.stateId || 0,
-                    city: formData.city,
-                    cp: formData.cp,
-                    street: formData.street,
-                    streetNumber: formData.streetNumber,
-                    description: formData.description,
-                    isDefault: true,
-                }
-            };
-
-            const response = await ApiService.customRequest(
-                '/api/v1/user/profile',
-                {
-                    method: 'PUT',
-                    body: JSON.stringify(profileUpdateData),
-                },
-                true
-            );
-
-            if (response.success) {
-                Alert.alert('Éxito', 'Perfil actualizado correctamente');
-            } else {
-                Alert.alert('Error', response.error || 'No se pudo actualizar el perfil');
-            }
-        } catch (error) {
-            Alert.alert('Error', 'Ocurrió un error al guardar los cambios');
-            console.error('Error guardando perfil:', error);
-        } finally {
-            setSaving(false);
-        }
-    };
-
-    const handleLogout = async () => {
-        Alert.alert(
-            'Cerrar Sesión',
-            '¿Estás seguro que deseas cerrar sesión?',
-            [
-                { text: 'Cancelar', style: 'cancel' },
-                {
-                    text: 'Cerrar Sesión',
-                    style: 'destructive',
-                    onPress: async () => {
-                        try {
-                            const response = await ApiService.logout();
-                            if (response.success) {
-                                // Aquí podrías agregar lógica adicional si es necesario
-                            } else {
-                                Alert.alert('Error', response.error || 'No se pudo cerrar sesión');
-                            }
-                        } catch (error) {
-                            Alert.alert('Error', 'Ocurrió un error al cerrar sesión');
-                            console.error('Error cerrando sesión:', error);
-                        }
-                    },
-                },
-            ]
+/** Cuántos datos tiene completos y cuáles faltan (con acceso directo). */
+function Completitud({ perfil, alIr }: { perfil: Perfil; alIr: (s: Seccion) => void }) {
+    const completos = TOTAL_DATOS - perfil.faltantes.length;
+    if (perfil.faltantes.length === 0) {
+        return (
+            <Text className="rounded-2xl bg-green-50 px-4 py-3 font-semibold text-base text-green-800 dark:bg-green-950 dark:text-green-300">
+                ¡Tus datos están completos! Gracias.
+            </Text>
         );
+    }
+    return (
+        <Tarjeta borde="border-amber-200 dark:border-amber-800">
+            <View className="flex-row items-baseline justify-between gap-3">
+                <Text className="font-bold text-lg text-texto">Completá tus datos</Text>
+                <Text className="font-semibold text-base text-texto-suave">
+                    {completos} de {TOTAL_DATOS}
+                </Text>
+            </View>
+            <View
+                accessibilityRole="progressbar"
+                accessibilityLabel="Datos completados"
+                accessibilityValue={{ min: 0, max: TOTAL_DATOS, now: completos }}
+                className="mt-3 h-3 overflow-hidden rounded-full bg-superficie-2"
+            >
+                <View
+                    className="h-full rounded-full bg-amber-500"
+                    style={{ width: `${(completos / TOTAL_DATOS) * 100}%` }}
+                />
+            </View>
+            <Text className="mt-3 text-base text-texto-suave">
+                Los necesita tu abogado para los escritos y los trámites. Te faltan:
+            </Text>
+            <View className="mt-2 flex-row flex-wrap gap-2">
+                {perfil.faltantes.map((f) => (
+                    <Pressable
+                        key={f}
+                        accessibilityRole="button"
+                        onPress={() => alIr(DE_DOMICILIO.has(f) ? "domicilio" : "datos")}
+                        className="min-h-10 justify-center rounded-full border border-amber-300 bg-amber-50 px-3 active:opacity-70 dark:border-amber-700 dark:bg-amber-950"
+                    >
+                        <Text className="font-semibold text-amber-900 text-sm dark:text-amber-200">{f}</Text>
+                    </Pressable>
+                ))}
+            </View>
+        </Tarjeta>
+    );
+}
+
+// ── Mis datos ───────────────────────────────────────────────────────────────
+
+/** "15031980" → "15/03/1980" mientras se escribe. */
+const conBarras = (texto: string) => {
+    const d = texto.replace(/\D/g, "").slice(0, 8);
+    return [d.slice(0, 2), d.slice(2, 4), d.slice(4)].filter(Boolean).join("/");
+};
+
+/** "15/03/1980" → "1980-03-15"; `null` si no es una fecha real. */
+function aIso(fecha: string): string | null {
+    const [dd, mm, aaaa] = fecha.split("/").map(Number);
+    const f = new Date(Date.UTC(aaaa, mm - 1, dd));
+    const real = f.getUTCFullYear() === aaaa && f.getUTCMonth() === mm - 1 && f.getUTCDate() === dd;
+    if (!real || aaaa < 1900 || f.getTime() > Date.now()) return null;
+    return f.toISOString().slice(0, 10);
+}
+
+// Datos personales que usa el estudio (escritos, formularios de la SRT). Nombre
+// y mail no se editan acá: el mail es con lo que se entra y el nombre lo
+// corrige el estudio si está mal.
+function SeccionDatos({ perfil }: { perfil: Perfil }) {
+    const guardar = useGuardarPerfil();
+    const [telefono, setTelefono] = useState(perfil.telefono ?? "");
+    const [nacimiento, setNacimiento] = useState(
+        perfil.fechaNacimiento?.slice(0, 10).split("-").reverse().join("/") ?? "",
+    );
+    const [genero, setGenero] = useState(perfil.genero ? String(perfil.genero) : "");
+    const [estadoCivil, setEstadoCivil] = useState(perfil.estadoCivil ?? "");
+    const [tipoDocumento, setTipoDocumento] = useState(String(perfil.tipoDocumento ?? 1));
+    const [documento, setDocumento] = useState(perfil.numeroDocumento ?? "");
+    const [cuit, setCuit] = useState(perfil.cuit ?? "");
+    const [errores, setErrores] = useState<Record<string, string>>({});
+
+    const enviar = () => {
+        const nuevos: Record<string, string> = {};
+        if (telefono && !/^[\d\s()+-]{6,30}$/.test(telefono)) {
+            nuevos.telefono = "El teléfono solo puede tener números, espacios y guiones.";
+        }
+        const fecha = nacimiento ? aIso(nacimiento) : null;
+        if (nacimiento && !fecha) nuevos.nacimiento = "Escribí la fecha así: 15/03/1980.";
+        const soloDigitosCuit = cuit.replace(/\D/g, "");
+        if (cuit && soloDigitosCuit.length !== 11) nuevos.cuit = "El CUIT/CUIL tiene 11 números.";
+        setErrores(nuevos);
+        if (Object.keys(nuevos).length) return;
+        guardar.mutate({
+            personaId: perfil.id,
+            telefono: telefono.trim(),
+            fechaNacimiento: fecha,
+            genero: genero ? Number(genero) : null,
+            estadoCivil: estadoCivil || null,
+            tipoDocumento: tipoDocumento ? Number(tipoDocumento) : null,
+            numeroDocumento: documento.trim(),
+            cuit: soloDigitosCuit
+                ? `${soloDigitosCuit.slice(0, 2)}-${soloDigitosCuit.slice(2, 10)}-${soloDigitosCuit.slice(10)}`
+                : "",
+        });
     };
 
     return (
-        <View style={styles.container}>
-            {/* Header */}
-            <View style={styles.header}>
-                <Text style={styles.headerTitleCentered}>Ajustes</Text>
+        <Tarjeta>
+            <TituloSeccion>Tus datos personales</TituloSeccion>
+            <View className="gap-4">
+                <Dato etiqueta="Nombre">{perfil.nombre}</Dato>
+                <Dato etiqueta="Mail">{perfil.email}</Dato>
             </View>
+            <Text className="mt-3 text-sm text-texto-suave">
+                ¿Tu nombre o tu mail están mal? Avisanos por WhatsApp y lo corregimos.
+            </Text>
 
-            <ScrollView
-                style={styles.content}
-                showsVerticalScrollIndicator={false}
-            >
-                {/* Perfil Card */}
-                <View style={styles.card}>
-                    <View style={styles.cardHeader}>
-                        <Ionicons name="person-outline" size={24} color="#09A4B5" />
-                        <Text style={styles.cardTitle}>Perfil</Text>
-                    </View>
-
-                    {/* Avatar */}
-                    <View style={styles.avatarSection}>
-                        <View style={styles.avatarCircle}>
-                            <Text style={styles.avatarText}>VJ</Text>
-                        </View>
-                        <View style={styles.avatarInfo}>
-                            <Text style={styles.avatarName}>{formData.name}</Text>
-                            <Text style={styles.avatarEmail}>{formData.email}</Text>
-                            <TouchableOpacity style={styles.changePhotoButton}>
-                                <Ionicons name="camera-outline" size={16} color="#09A4B5" />
-                                <Text style={styles.changePhotoText}>Cambiar foto</Text>
-                            </TouchableOpacity>
-                        </View>
-                    </View>
-                </View>
-
-                {/* Información Personal Card */}
-                <View style={styles.card}>
-                    <View style={styles.cardHeader}>
-                        <Ionicons name="document-text-outline" size={24} color="#09A4B5" />
-                        <Text style={styles.cardTitle}>Información Personal</Text>
-                    </View>
-
-                    {/* Nombre completo */}
-                    <View style={styles.inputGroup}>
-                        <Text style={styles.inputLabel}>Nombre completo</Text>
-                        <View style={styles.inputContainer}>
-                            <Ionicons name="person-outline" size={20} color="#64748b" style={styles.inputIcon} />
-                            <TextInput
-                                style={styles.input}
-                                value={formData.name}
-                                onChangeText={(text) => setFormData({ ...formData, name: text })}
-                                placeholder="Ingresa tu nombre completo"
-                                placeholderTextColor="#94a3b8"
-                            />
-                        </View>
-                    </View>
-
-                    {/* Email */}
-                    <View style={styles.inputGroup}>
-                        <Text style={styles.inputLabel}>Correo electrónico</Text>
-                        <View style={[styles.inputContainer, styles.inputDisabled]}>
-                            <Ionicons name="mail-outline" size={20} color="#94a3b8" style={styles.inputIcon} />
-                            <TextInput
-                                style={[styles.input, { color: '#94a3b8' }]}
-                                value={formData.email}
-                                editable={false}
-                            />
-                            <Ionicons name="lock-closed-outline" size={18} color="#94a3b8" />
-                        </View>
-                        <Text style={styles.inputHint}>
-                            <Ionicons name="information-circle-outline" size={12} color="#64748b" /> El correo electrónico no se puede modificar
-                        </Text>
-                    </View>
-
-                    {/* Tipo de documento y número en fila */}
-                    <View style={styles.inputRow}>
-                        <View style={[styles.inputGroup, { flex: 1 }]}>
-                            <Text style={styles.inputLabel}>Tipo de documento</Text>
-                            <TouchableOpacity
-                                style={styles.select}
-                                onPress={() => setShowDocumentPicker(!showDocumentPicker)}
-                            >
-                                <Text style={[styles.selectText, !formData.docType && styles.selectPlaceholder]}>
-                                    {getDocTypeLabel()}
-                                </Text>
-                                <Ionicons name="chevron-down" size={20} color="#64748b" />
-                            </TouchableOpacity>
-                            {showDocumentPicker && (
-                                <View style={styles.pickerDropdown}>
-                                    {docsType.map((type) => (
-                                        <TouchableOpacity
-                                            key={type.id}
-                                            style={styles.pickerOption}
-                                            onPress={() => {
-                                                setFormData({ ...formData, docType: type.value });
-                                                setShowDocumentPicker(false);
-                                            }}
-                                        >
-                                            <Text style={styles.pickerOptionText}>{type.label}</Text>
-                                            {formData.docType === type.value && (
-                                                <Ionicons name="checkmark" size={20} color="#09A4B5" />
-                                            )}
-                                        </TouchableOpacity>
-                                    ))}
-                                </View>
-                            )}
-                        </View>
-
-                        <View style={[styles.inputGroup, { flex: 1.5 }]}>
-                            <Text style={styles.inputLabel}>Número</Text>
-                            <View style={styles.inputContainer}>
-                                <Ionicons name="card-outline" size={20} color="#64748b" style={styles.inputIcon} />
-                                <TextInput
-                                    style={styles.input}
-                                    value={formData.docNumber}
-                                    onChangeText={(text) => setFormData({ ...formData, docNumber: text })}
-                                    placeholder="Número"
-                                    placeholderTextColor="#94a3b8"
-                                    keyboardType="numeric"
-                                />
-                            </View>
-                        </View>
-                    </View>
-
-                    {/* Teléfono y Fecha de nacimiento en fila */}
-                    <View style={styles.inputRow}>
-                        <View style={[styles.inputGroup, { flex: 1 }]}>
-                            <Text style={styles.inputLabel}>Teléfono</Text>
-                            <View style={styles.inputContainer}>
-                                <Ionicons name="call-outline" size={20} color="#64748b" style={styles.inputIcon} />
-                                <TextInput
-                                    style={styles.input}
-                                    value={formData.phone}
-                                    onChangeText={(text) => setFormData({ ...formData, phone: text })}
-                                    placeholder="Tu teléfono"
-                                    placeholderTextColor="#94a3b8"
-                                    keyboardType="phone-pad"
-                                />
-                            </View>
-                        </View>
-
-                        <View style={[styles.inputGroup, { flex: 1 }]}>
-                            <Text style={styles.inputLabel}>Fecha de nacimiento</Text>
-                            <TouchableOpacity
-                                style={styles.inputContainer}
-                                onPress={() => {
-                                    if (formData.birthDate) {
-                                        setDatePickerDate(parseDateString(formData.birthDate));
-                                    }
-                                    setShowDatePicker(true);
-                                }}
-                            >
-                                <Ionicons name="calendar-outline" size={20} color="#64748b" style={styles.inputIcon} />
-                                <Text style={[styles.input, !formData.birthDate && { color: '#94a3b8' }]}>
-                                    {formData.birthDate || 'DD/MM/AAAA'}
-                                </Text>
-                            </TouchableOpacity>
-                        </View>
-                    </View>
-
-                    {/* DatePicker Modal para iOS */}
-                    {Platform.OS === 'ios' && showDatePicker && (
-                        <Modal
-                            transparent={true}
-                            animationType="fade"
-                            visible={showDatePicker}
-                            onRequestClose={() => setShowDatePicker(false)}
-                        >
-                            <View style={styles.modalOverlay}>
-                                <View style={styles.datePickerModalContainer}>
-                                    <View style={styles.datePickerHeader}>
-                                        <TouchableOpacity onPress={() => setShowDatePicker(false)} style={{ minWidth: 80 }}>
-                                            <Text style={styles.datePickerCancelText}>Cancelar</Text>
-                                        </TouchableOpacity>
-                                        <Text style={styles.datePickerTitle}>Fecha de nacimiento</Text>
-                                        <TouchableOpacity onPress={() => setShowDatePicker(false)} style={{ minWidth: 80, alignItems: 'flex-end' }}>
-                                            <Text style={styles.datePickerDoneText}>Listo</Text>
-                                        </TouchableOpacity>
-                                    </View>
-                                    <View style={styles.datePickerContent}>
-                                        <DateTimePicker
-                                            value={datePickerDate}
-                                            mode="date"
-                                            display="spinner"
-                                            onChange={handleDateChange}
-                                            maximumDate={new Date()}
-                                            locale="es-ES"
-                                            textColor="#1C2434"
-                                            style={{ width: '100%' }}
-                                        />
-                                    </View>
-                                </View>
-                            </View>
-                        </Modal>
-                    )}
-
-                    {/* DatePicker Android */}
-                    {Platform.OS === 'android' && showDatePicker && (
-                        <DateTimePicker
-                            value={datePickerDate}
-                            mode="date"
-                            display="default"
-                            onChange={handleDateChange}
-                            maximumDate={new Date()}
-                            locale="es-ES"
-                        />
-                    )}
-
-                    {/* Sexo */}
-                    <View style={styles.inputGroup}>
-                        <Text style={styles.inputLabel}>Género</Text>
-                        <TouchableOpacity
-                            style={styles.select}
-                            onPress={() => setShowGenderPicker(!showGenderPicker)}
-                        >
-                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                                <Ionicons name="male-female-outline" size={20} color="#64748b" />
-                                <Text style={[styles.selectText, !formData.gender && styles.selectPlaceholder]}>
-                                    {getGenderLabel()}
-                                </Text>
-                            </View>
-                            <Ionicons name="chevron-down" size={20} color="#64748b" />
-                        </TouchableOpacity>
-                        {showGenderPicker && (
-                            <View style={styles.pickerDropdown}>
-                                {genderType.map((gender) => (
-                                    <TouchableOpacity
-                                        key={gender.id}
-                                        style={styles.pickerOption}
-                                        onPress={() => {
-                                            setFormData({ ...formData, gender: gender.value });
-                                            setShowGenderPicker(false);
-                                        }}
-                                    >
-                                        <Text style={styles.pickerOptionText}>{gender.label}</Text>
-                                        {formData.gender === gender.value && (
-                                            <Ionicons name="checkmark" size={20} color="#09A4B5" />
-                                        )}
-                                    </TouchableOpacity>
-                                ))}
-                            </View>
-                        )}
-                    </View>
-
-
-
-                </View>
-
-                {/* Domicilio Card */}
-                <View style={styles.card}>
-                    <View style={styles.cardHeader}>
-                        <Ionicons name="home-outline" size={24} color="#09A4B5" />
-                        <Text style={styles.cardTitle}>Domicilio</Text>
-                    </View>
-
-                    {/* País */}
-                    <View style={styles.inputGroup}>
-                        <Text style={styles.inputLabel}>País</Text>
-                        {loading ? (
-                            <View style={[styles.select, { justifyContent: 'center' }]}>
-                                <ActivityIndicator size="small" color="#09A4B5" />
-                            </View>
-                        ) : (
-                            <>
-                                <TouchableOpacity
-                                    style={styles.select}
-                                    onPress={() => setShowCountryPicker(!showCountryPicker)}
-                                    disabled={countries.length === 0}
-                                >
-                                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                                        <Ionicons name="globe-outline" size={20} color="#64748b" />
-                                        <Text style={[styles.selectText, !getSelectedCountry() && styles.selectPlaceholder]}>
-                                            {getSelectedCountry()?.name || 'Selecciona un país'}
-                                        </Text>
-                                    </View>
-                                    <Ionicons name="chevron-down" size={20} color="#64748b" />
-                                </TouchableOpacity>
-                                {showCountryPicker && (
-                                    <View style={styles.pickerDropdown}>
-                                        <ScrollView style={{ maxHeight: 250 }} nestedScrollEnabled>
-                                            {countries.map((country) => (
-                                                <TouchableOpacity
-                                                    key={country.id}
-                                                    style={styles.pickerOption}
-                                                    onPress={() => {
-                                                        setFormData({ ...formData, countryId: country.id, stateId: null });
-                                                        setShowCountryPicker(false);
-                                                    }}
-                                                >
-                                                    <Text style={styles.pickerOptionText}>{country.name}</Text>
-                                                    {formData.countryId === country.id && (
-                                                        <Ionicons name="checkmark" size={20} color="#09A4B5" />
-                                                    )}
-                                                </TouchableOpacity>
-                                            ))}
-                                        </ScrollView>
-                                    </View>
-                                )}
-                            </>
-                        )}
-                    </View>
-
-                    {/* Estado/Provincia */}
-                    {formData.countryId && getAvailableStates().length > 0 && (
-                        <View style={styles.inputGroup}>
-                            <Text style={styles.inputLabel}>Estado/Provincia</Text>
-                            <TouchableOpacity
-                                style={styles.select}
-                                onPress={() => setShowStatePicker(!showStatePicker)}
-                            >
-                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                                    <Ionicons name="location-outline" size={20} color="#64748b" />
-                                    <Text style={[styles.selectText, !getSelectedState() && styles.selectPlaceholder]}>
-                                        {getSelectedState()?.name || 'Selecciona un estado'}
-                                    </Text>
-                                </View>
-                                <Ionicons name="chevron-down" size={20} color="#64748b" />
-                            </TouchableOpacity>
-                            {showStatePicker && (
-                                <View style={styles.pickerDropdown}>
-                                    <ScrollView style={{ maxHeight: 250 }} nestedScrollEnabled>
-                                        {getAvailableStates().map((state) => (
-                                            <TouchableOpacity
-                                                key={state.id}
-                                                style={styles.pickerOption}
-                                                onPress={() => {
-                                                    setFormData({ ...formData, stateId: state.id });
-                                                    setShowStatePicker(false);
-                                                }}
-                                            >
-                                                <Text style={styles.pickerOptionText}>{state.name}</Text>
-                                                {formData.stateId === state.id && (
-                                                    <Ionicons name="checkmark" size={20} color="#09A4B5" />
-                                                )}
-                                            </TouchableOpacity>
-                                        ))}
-                                    </ScrollView>
-                                </View>
-                            )}
-                        </View>
-                    )}
-
-                    {/* Calle y Número en fila */}
-                    <View style={styles.inputRow}>
-                        <View style={[styles.inputGroup, { flex: 2 }]}>
-                            <Text style={styles.inputLabel}>Calle</Text>
-                            <View style={styles.inputContainer}>
-                                <Ionicons name="navigate-outline" size={20} color="#64748b" style={styles.inputIcon} />
-                                <TextInput
-                                    style={styles.input}
-                                    value={formData.street}
-                                    onChangeText={(text) => setFormData({ ...formData, street: text })}
-                                    placeholder="Nombre de la calle"
-                                    placeholderTextColor="#94a3b8"
-                                />
-                            </View>
-                        </View>
-
-                        <View style={[styles.inputGroup, { flex: 1 }]}>
-                            <Text style={styles.inputLabel}>Número</Text>
-                            <View style={styles.inputContainer}>
-                                <TextInput
-                                    style={styles.input}
-                                    value={formData.streetNumber}
-                                    onChangeText={(text) => setFormData({ ...formData, streetNumber: text })}
-                                    placeholder="Nº"
-                                    placeholderTextColor="#94a3b8"
-                                    keyboardType="numeric"
-                                />
-                            </View>
-                        </View>
-                    </View>
-
-                    {/* Ciudad y Código Postal en fila */}
-                    <View style={styles.inputRow}>
-                        <View style={[styles.inputGroup, { flex: 2 }]}>
-                            <Text style={styles.inputLabel}>Ciudad</Text>
-                            <View style={styles.inputContainer}>
-                                <Ionicons name="business-outline" size={20} color="#64748b" style={styles.inputIcon} />
-                                <TextInput
-                                    style={styles.input}
-                                    value={formData.city}
-                                    onChangeText={(text) => setFormData({ ...formData, city: text })}
-                                    placeholder="Ciudad"
-                                    placeholderTextColor="#94a3b8"
-                                />
-                            </View>
-                        </View>
-
-                        <View style={[styles.inputGroup, { flex: 1 }]}>
-                            <Text style={styles.inputLabel}>C.P.</Text>
-                            <View style={styles.inputContainer}>
-                                <TextInput
-                                    style={styles.input}
-                                    value={formData.cp}
-                                    onChangeText={(text) => setFormData({ ...formData, cp: text })}
-                                    placeholder="C.P."
-                                    placeholderTextColor="#94a3b8"
-                                    keyboardType="numeric"
-                                />
-                            </View>
-                        </View>
-                    </View>
-
-                    {/* Descripción/Aclaraciones */}
-                    <View style={styles.inputGroup}>
-                        <Text style={styles.inputLabel}>Aclaraciones (opcional)</Text>
-                        <View style={[styles.inputContainer, { height: 80, alignItems: 'flex-start' }]}>
-                            <Ionicons name="document-text-outline" size={20} color="#64748b" style={[styles.inputIcon, { marginTop: 12 }]} />
-                            <TextInput
-                                style={[styles.input, { height: 70, textAlignVertical: 'top', paddingTop: 10 }]}
-                                value={formData.description}
-                                onChangeText={(text) => setFormData({ ...formData, description: text })}
-                                placeholder="Piso, departamento, referencias..."
-                                placeholderTextColor="#94a3b8"
-                                multiline
-                                numberOfLines={3}
-                            />
-                        </View>
-                    </View>
-                </View>
-
-                {/* Notificaciones Card */}
-                <View style={styles.card}>
-                    <View style={styles.cardHeader}>
-                        <Ionicons name="notifications-outline" size={24} color="#09A4B5" />
-                        <Text style={styles.cardTitle}>Notificaciones</Text>
-                    </View>
-
-                    <NotificationItem
-                        icon="phone-portrait-outline"
-                        title="Notificaciones Push"
-                        description="Recibe alertas en tu dispositivo"
-                        value={notifications.push}
-                        onValueChange={(value) => setNotifications({ ...notifications, push: value })}
-                    />
-                    <NotificationItem
-                        icon="mail-outline"
-                        title="Notificaciones por Email"
-                        description="Recibe actualizaciones por correo"
-                        value={notifications.email}
-                        onValueChange={(value) => setNotifications({ ...notifications, email: value })}
-                    />
-                    <NotificationItem
-                        icon="briefcase-outline"
-                        title="Actualizaciones de Casos"
-                        description="Cambios en el estado de tus casos"
-                        value={notifications.caseUpdates}
-                        onValueChange={(value) => setNotifications({ ...notifications, caseUpdates: value })}
-                    />
-                    <NotificationItem
-                        icon="chatbubble-outline"
-                        title="Mensajes"
-                        description="Nuevos mensajes de tu abogado"
-                        value={notifications.messages}
-                        onValueChange={(value) => setNotifications({ ...notifications, messages: value })}
-                        isLast
-                    />
-                </View>
-
-                {/* Botón Guardar */}
-                <TouchableOpacity
-                    style={[styles.saveButton, saving && styles.saveButtonDisabled]}
-                    onPress={handleSaveChanges}
-                    disabled={saving}
-                >
-                    {saving ? (
-                        <>
-                            <ActivityIndicator size="small" color="#fff" />
-                            <Text style={styles.saveButtonText}>Guardando...</Text>
-                        </>
-                    ) : (
-                        <>
-                            <Ionicons name="checkmark-circle-outline" size={22} color="#fff" />
-                            <Text style={styles.saveButtonText}>Guardar Cambios</Text>
-                        </>
-                    )}
-                </TouchableOpacity>
-
-                {/* Opciones Card */}
-                <View style={styles.card}>
-                    <View style={styles.cardHeader}>
-                        <Ionicons name="settings-outline" size={24} color="#09A4B5" />
-                        <Text style={styles.cardTitle}>Más Opciones</Text>
-                    </View>
-
-                    <TouchableOpacity
-                        style={styles.optionItem}
-                        onPress={onNavigateToAbout}
-                    >
-                        <View style={styles.optionLeft}>
-                            <View style={styles.optionIconContainer}>
-                                <Ionicons name="information-circle-outline" size={22} color="#09A4B5" />
-                            </View>
-                            <View>
-                                <Text style={styles.optionTitle}>Acerca de Legalistas</Text>
-                                <Text style={styles.optionDescription}>Información de la aplicación</Text>
-                            </View>
-                        </View>
-                        <Ionicons name="chevron-forward" size={20} color="#cbd5e1" />
-                    </TouchableOpacity>
-
-                    <TouchableOpacity style={styles.optionItem}>
-                        <View style={styles.optionLeft}>
-                            <View style={styles.optionIconContainer}>
-                                <Ionicons name="help-circle-outline" size={22} color="#09A4B5" />
-                            </View>
-                            <View>
-                                <Text style={styles.optionTitle}>Centro de Ayuda</Text>
-                                <Text style={styles.optionDescription}>Preguntas frecuentes</Text>
-                            </View>
-                        </View>
-                        <Ionicons name="chevron-forward" size={20} color="#cbd5e1" />
-                    </TouchableOpacity>
-
-                    <TouchableOpacity style={styles.optionItem}>
-                        <View style={styles.optionLeft}>
-                            <View style={styles.optionIconContainer}>
-                                <Ionicons name="document-text-outline" size={22} color="#09A4B5" />
-                            </View>
-                            <View>
-                                <Text style={styles.optionTitle}>Términos y Condiciones</Text>
-                                <Text style={styles.optionDescription}>Políticas de uso</Text>
-                            </View>
-                        </View>
-                        <Ionicons name="chevron-forward" size={20} color="#cbd5e1" />
-                    </TouchableOpacity>
-
-                    <TouchableOpacity style={[styles.optionItem, { borderBottomWidth: 0 }]} onPress={handleLogout}>
-                        <View style={styles.optionLeft}>
-                            <View style={[styles.optionIconContainer, { backgroundColor: '#fee2e2' }]}>
-                                <Ionicons name="log-out-outline" size={22} color="#ef4444" />
-                            </View>
-                            <View>
-                                <Text style={[styles.optionTitle, { color: '#ef4444' }]}>Cerrar Sesión</Text>
-                                <Text style={styles.optionDescription}>Salir de tu cuenta</Text>
-                            </View>
-                        </View>
-                        <Ionicons name="chevron-forward" size={20} color="#cbd5e1" />
-                    </TouchableOpacity>
-                </View>
-
-                {/* Footer */}
-                <View style={styles.footer}>
-                    <Text style={styles.footerText}>Versión 1.0.0</Text>
-                    <Text style={styles.footerSubtext}>© 2026 Legalistas. Todos los derechos reservados.</Text>
-                </View>
-
-                <View style={{ height: 40 }} />
-            </ScrollView>
-        </View>
+            <View className="mt-6 gap-5 border-borde border-t pt-6">
+                <Campo
+                    etiqueta="Teléfono"
+                    keyboardType="phone-pad"
+                    autoComplete="tel"
+                    textContentType="telephoneNumber"
+                    value={telefono}
+                    onChangeText={setTelefono}
+                    placeholder="Por ejemplo: 342 555-1234"
+                    icono="call-outline"
+                    falta={!perfil.telefono}
+                    error={errores.telefono}
+                />
+                <Campo
+                    etiqueta="Fecha de nacimiento"
+                    keyboardType="number-pad"
+                    value={nacimiento}
+                    onChangeText={(texto) => setNacimiento(conBarras(texto))}
+                    placeholder="Día/mes/año: 15/03/1980"
+                    maxLength={10}
+                    icono="calendar-outline"
+                    falta={!perfil.fechaNacimiento}
+                    error={errores.nacimiento}
+                />
+                <Selector
+                    etiqueta="Género"
+                    valor={genero}
+                    alCambiar={setGenero}
+                    opciones={GENEROS.map((g) => ({ valor: String(g.valor), texto: g.texto }))}
+                    falta={!perfil.genero}
+                />
+                <Selector
+                    etiqueta="Estado civil"
+                    valor={estadoCivil}
+                    alCambiar={setEstadoCivil}
+                    opciones={ESTADOS_CIVILES.map((e) => ({ valor: e, texto: e }))}
+                    falta={!perfil.estadoCivil}
+                />
+                <Selector
+                    etiqueta="Tipo de documento"
+                    valor={tipoDocumento}
+                    alCambiar={setTipoDocumento}
+                    opciones={TIPOS_DOCUMENTO.map((t) => ({ valor: String(t.valor), texto: t.texto }))}
+                />
+                <Campo
+                    etiqueta="Número de documento"
+                    keyboardType="number-pad"
+                    value={documento}
+                    onChangeText={setDocumento}
+                    placeholder="Sin puntos"
+                    icono="card-outline"
+                    falta={!perfil.numeroDocumento}
+                />
+                <Campo
+                    etiqueta="CUIT/CUIL"
+                    keyboardType="number-pad"
+                    value={cuit}
+                    onChangeText={setCuit}
+                    placeholder="20-12345678-9"
+                    ayuda="Son 11 números. Está en tu recibo de sueldo o en la página de ANSES."
+                    falta={!perfil.cuit}
+                    error={errores.cuit}
+                />
+                <Boton tamanio="lg" ancho="completo" cargando={guardar.isPending} onPress={enviar}>
+                    Guardar mis datos
+                </Boton>
+            </View>
+        </Tarjeta>
     );
-};
-
-interface NotificationItemProps {
-    icon: string;
-    title: string;
-    description: string;
-    value: boolean;
-    onValueChange: (value: boolean) => void;
-    isLast?: boolean;
 }
 
-const NotificationItem: React.FC<NotificationItemProps> = ({
-    icon,
-    title,
-    description,
-    value,
-    onValueChange,
-    isLast = false
-}) => (
-    <View style={[styles.notificationItem, isLast && { borderBottomWidth: 0 }]}>
-        <View style={styles.notificationIconContainer}>
-            <Ionicons name={icon as any} size={22} color="#09A4B5" />
-        </View>
-        <View style={styles.notificationContent}>
-            <Text style={styles.notificationTitle}>{title}</Text>
-            <Text style={styles.notificationDescription}>{description}</Text>
-        </View>
-        <Switch
-            value={value}
-            onValueChange={onValueChange}
-            trackColor={{ false: '#e2e8f0', true: '#09A4B5' }}
-            thumbColor="#ffffff"
-        />
-    </View>
-);
+// Domicilio real (lo piden los escritos y la SRT). Se guarda como domicilio
+// principal de la persona; el país es siempre Argentina.
+function SeccionDomicilio({ perfil }: { perfil: Perfil }) {
+    const guardar = useGuardarPerfil();
+    const provincias = useProvincias();
+    const d = perfil.domicilio;
+    const [calle, setCalle] = useState(d.calle ?? "");
+    const [numero, setNumero] = useState(d.numero ?? "");
+    const [depto, setDepto] = useState(d.depto ?? "");
+    const [localidad, setLocalidad] = useState(d.localidad ?? "");
+    const [cp, setCp] = useState(d.codigoPostal ?? "");
+    const [provinciaId, setProvinciaId] = useState(d.provinciaId ? String(d.provinciaId) : "");
+    const [error, setError] = useState<string | null>(null);
 
-const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: '#f8fafc',
-    },
-    header: {
-        backgroundColor: '#1C2434',
-        paddingHorizontal: 20,
-        paddingTop: 60,
-        paddingBottom: 20,
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 16,
-    },
-    backButton: {
-        width: 40,
-        height: 40,
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    headerTitle: {
-        ...typography.h4,
-        color: '#ffffff',
-        flex: 1,
-    },
-    headerTitleCentered: {
-        ...typography.h4,
-        color: '#ffffff',
-        textAlign: 'center',
-        flex: 1,
-    },
-    content: {
-        flex: 1,
-    },
-    card: {
-        backgroundColor: '#ffffff',
-        marginHorizontal: 20,
-        marginTop: 20,
-        borderRadius: 16,
-        padding: 20,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.05,
-        shadowRadius: 8,
-        elevation: 2,
-    },
-    cardHeader: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 12,
-        marginBottom: 20,
-    },
-    cardTitle: {
-        ...typography.h5,
-        color: '#1C2434',
-    },
-    avatarSection: {
-        flexDirection: 'row',
-        gap: 16,
-        alignItems: 'center',
-    },
-    avatarCircle: {
-        width: 80,
-        height: 80,
-        borderRadius: 40,
-        backgroundColor: '#09A4B5',
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    avatarText: {
-        ...typography.h2,
-        color: '#fff',
-    },
-    avatarInfo: {
-        flex: 1,
-    },
-    avatarName: {
-        ...typography.h5,
-        color: '#1C2434',
-        marginBottom: 4,
-    },
-    avatarEmail: {
-        ...typography.bodySmall,
-        color: '#64748b',
-        marginBottom: 10,
-    },
-    changePhotoButton: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 6,
-    },
-    changePhotoText: {
-        ...typography.bodySmall,
-        color: '#09A4B5',
-    },
-    inputGroup: {
-        marginBottom: 16,
-    },
-    inputRow: {
-        flexDirection: 'row',
-        gap: 12,
-    },
-    inputLabel: {
-        ...typography.bodySmall,
-        color: '#1C2434',
-        marginBottom: 8,
-    },
-    inputContainer: {
-        height: 50,
-        borderWidth: 1,
-        borderColor: '#e2e8f0',
-        borderRadius: 10,
-        paddingHorizontal: 16,
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: '#fff',
-        gap: 10,
-    },
-    inputIcon: {
-        marginRight: 4,
-    },
-    input: {
-        ...typography.body,
-        flex: 1,
-        color: '#1C2434',
-    },
-    inputDisabled: {
-        backgroundColor: '#f8fafc',
-    },
-    inputHint: {
-        ...typography.caption,
-        color: '#64748b',
-        marginTop: 6,
-    },
-    select: {
-        height: 50,
-        borderWidth: 1,
-        borderColor: '#e2e8f0',
-        borderRadius: 10,
-        paddingHorizontal: 16,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        backgroundColor: '#fff',
-    },
-    selectText: {
-        ...typography.body,
-        color: '#1C2434',
-    },
-    selectPlaceholder: {
-        color: '#94a3b8',
-    },
-    pickerDropdown: {
-        marginTop: 8,
-        backgroundColor: '#fff',
-        borderRadius: 10,
-        borderWidth: 1,
-        borderColor: '#e2e8f0',
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.1,
-        shadowRadius: 12,
-        elevation: 4,
-        overflow: 'hidden',
-    },
-    pickerOption: {
-        padding: 16,
-        borderBottomWidth: 1,
-        borderBottomColor: '#f1f5f9',
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-    },
-    pickerOptionText: {
-        ...typography.body,
-        color: '#1C2434',
-    },
-    notificationItem: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        paddingVertical: 16,
-        borderBottomWidth: 1,
-        borderBottomColor: '#f1f5f9',
-        gap: 12,
-    },
-    notificationIconContainer: {
-        width: 44,
-        height: 44,
-        borderRadius: 22,
-        backgroundColor: '#e6f7f9',
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    notificationContent: {
-        flex: 1,
-    },
-    notificationTitle: {
-        ...typography.body,
-        color: '#1C2434',
-        marginBottom: 3,
-    },
-    notificationDescription: {
-        ...typography.caption,
-        color: '#64748b',
-    },
-    saveButton: {
-        backgroundColor: '#09A4B5',
-        height: 54,
-        borderRadius: 12,
-        alignItems: 'center',
-        justifyContent: 'center',
-        marginHorizontal: 20,
-        marginTop: 24,
-        marginBottom: 8,
-        flexDirection: 'row',
-        gap: 10,
-        shadowColor: '#09A4B5',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.3,
-        shadowRadius: 12,
-        elevation: 6,
-    },
-    saveButtonDisabled: {
-        backgroundColor: '#94a3b8',
-        shadowOpacity: 0.1,
-    },
-    saveButtonText: {
-        ...typography.buttonSmall,
-        color: '#fff',
-    },
-    modalOverlay: {
-        flex: 1,
-        backgroundColor: 'rgba(0, 0, 0, 0.5)',
-        justifyContent: 'flex-end',
-    },
-    datePickerModalContainer: {
-        backgroundColor: '#ffffff',
-        borderTopLeftRadius: 20,
-        borderTopRightRadius: 20,
-        paddingBottom: 40,
-        width: '100%',
-    },
-    datePickerHeader: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        paddingHorizontal: 20,
-        paddingVertical: 16,
-        borderBottomWidth: 1,
-        borderBottomColor: '#f1f5f9',
-        width: '100%',
-    },
-    datePickerTitle: {
-        fontSize: 17,
-        fontWeight: '600',
-        color: '#1C2434',
-    },
-    datePickerCancelText: {
-        fontSize: 16,
-        color: '#64748b',
-    },
-    datePickerDoneText: {
-        fontSize: 16,
-        fontWeight: '600',
-        color: '#09A4B5',
-    },
-    datePickerContent: {
-        width: '100%',
-        alignItems: 'center',
-        justifyContent: 'center',
-        paddingVertical: 10,
-    },
-    optionItem: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        paddingVertical: 16,
-        borderBottomWidth: 1,
-        borderBottomColor: '#f1f5f9',
-    },
-    optionLeft: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 12,
-        flex: 1,
-    },
-    optionIconContainer: {
-        width: 44,
-        height: 44,
-        borderRadius: 22,
-        backgroundColor: '#e6f7f9',
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    optionTitle: {
-        fontSize: 15,
-        fontWeight: '600',
-        color: '#1C2434',
-        marginBottom: 3,
-    },
-    optionDescription: {
-        fontSize: 13,
-        color: '#64748b',
-    },
-    footer: {
-        alignItems: 'center',
-        marginTop: 32,
-        marginBottom: 20,
-        paddingHorizontal: 20,
-    },
-    footerText: {
-        fontSize: 13,
-        color: '#94a3b8',
-        marginBottom: 4,
-    },
-    footerSubtext: {
-        fontSize: 12,
-        color: '#cbd5e1',
-        textAlign: 'center',
-    },
-});
+    const enviar = () => {
+        if (!provinciaId) {
+            setError("Elegí la provincia.");
+            return;
+        }
+        setError(null);
+        guardar.mutate({
+            personaId: perfil.id,
+            domicilio: {
+                calle: calle.trim(),
+                numero: numero.trim(),
+                depto: depto.trim(),
+                localidad: localidad.trim(),
+                codigoPostal: cp.trim(),
+                provinciaId: Number(provinciaId),
+            },
+        });
+    };
 
-export default SettingsScreen;
+    return (
+        <Tarjeta>
+            <TituloSeccion>Tu domicilio</TituloSeccion>
+            <Text className="-mt-1 text-base text-texto-suave">
+                Donde vivís hoy. Lo necesitamos para los escritos y los trámites de tu caso.
+            </Text>
+            <View className="mt-5 gap-5">
+                <Campo
+                    etiqueta="Calle"
+                    autoComplete="address-line1"
+                    value={calle}
+                    onChangeText={setCalle}
+                    icono="location-outline"
+                    falta={!d.calle}
+                />
+                <View className="flex-row gap-3">
+                    <Campo
+                        className="flex-1"
+                        etiqueta="Número"
+                        keyboardType="number-pad"
+                        value={numero}
+                        onChangeText={setNumero}
+                        falta={!d.numero}
+                    />
+                    <Campo
+                        className="flex-1"
+                        etiqueta="Piso / Depto"
+                        autoComplete="address-line2"
+                        value={depto}
+                        onChangeText={setDepto}
+                        placeholder="3° B"
+                    />
+                </View>
+                <Campo
+                    etiqueta="Localidad"
+                    value={localidad}
+                    onChangeText={setLocalidad}
+                    placeholder="Por ejemplo: Santa Fe"
+                    falta={!d.localidad}
+                />
+                <Selector
+                    etiqueta="Provincia"
+                    valor={provinciaId}
+                    alCambiar={setProvinciaId}
+                    opciones={(provincias.data ?? []).map((p) => ({ valor: String(p.id), texto: p.nombre }))}
+                    vacio={provincias.isPending ? "Cargando provincias…" : "Elegí la provincia"}
+                    falta={!d.provinciaId}
+                />
+                <Campo
+                    etiqueta="Código postal"
+                    keyboardType="number-pad"
+                    autoComplete="postal-code"
+                    value={cp}
+                    onChangeText={setCp}
+                    falta={!d.codigoPostal}
+                    error={error}
+                />
+                <Boton tamanio="lg" ancho="completo" cargando={guardar.isPending} onPress={enviar}>
+                    Guardar domicilio
+                </Boton>
+            </View>
+        </Tarjeta>
+    );
+}
+
+function SeccionAvisos({ perfil }: { perfil: Perfil }) {
+    const guardar = useGuardarPerfil();
+    const cambiar = (clave: keyof Perfil["avisos"], valor: boolean) =>
+        guardar.mutate({ personaId: perfil.id, avisos: { [clave]: valor } });
+    return (
+        <Tarjeta>
+            <TituloSeccion>Avisos</TituloSeccion>
+            <Text className="-mt-1 text-base text-texto-suave">Elegí de qué querés que te avisemos.</Text>
+            <View className="mt-2">
+                <Interruptor
+                    etiqueta="Avisos por mail"
+                    descripcion="Te mandamos un mail con cada novedad."
+                    activo={perfil.avisos.email}
+                    alCambiar={(v) => cambiar("email", v)}
+                    deshabilitado={guardar.isPending}
+                />
+                <View className="h-px bg-borde" />
+                <Interruptor
+                    etiqueta="Novedades del caso"
+                    descripcion="Cambios de etapa, audiencias e informes."
+                    activo={perfil.avisos.casos}
+                    alCambiar={(v) => cambiar("casos", v)}
+                    deshabilitado={guardar.isPending}
+                />
+                <View className="h-px bg-borde" />
+                <Interruptor
+                    etiqueta="Respuestas de tu abogado"
+                    descripcion="Cuando te contestan una consulta."
+                    activo={perfil.avisos.mensajes}
+                    alCambiar={(v) => cambiar("mensajes", v)}
+                    deshabilitado={guardar.isPending}
+                />
+            </View>
+        </Tarjeta>
+    );
+}
+
+/** Modo oscuro (se guarda en este dispositivo). */
+function SeccionApariencia() {
+    const tema = useTema();
+    return (
+        <Tarjeta>
+            <Opciones
+                etiqueta="Colores"
+                valor={tema}
+                alCambiar={cambiarTema}
+                opciones={[
+                    { valor: "claro", texto: "Claro", icono: "sunny-outline" },
+                    { valor: "oscuro", texto: "Oscuro", icono: "moon-outline" },
+                    { valor: "sistema", texto: "Automático", icono: "contrast-outline" },
+                ]}
+            />
+            <Text className="mt-4 text-sm text-texto-suave">
+                El modo oscuro cansa menos la vista de noche. El tamaño de la letra se toma de los
+                ajustes de accesibilidad de tu teléfono.
+            </Text>
+        </Tarjeta>
+    );
+}
+
+// ── Ajustes ─────────────────────────────────────────────────────────────────
+
+function SeccionAjustes({ perfil }: { perfil: Perfil | undefined }) {
+    const navigation = useNavigation<Nav>();
+    const web = (url: string, title: string) => navigation.navigate("WebView", { url, title });
+    return (
+        <View className="gap-6">
+            <DosPasos />
+            <Sesiones />
+            <UltimosIngresos />
+
+            <View>
+                <TituloSeccion>Más opciones</TituloSeccion>
+                <View className="overflow-hidden rounded-2xl border border-borde bg-superficie">
+                    <Fila
+                        primera
+                        icono="time-outline"
+                        texto="Mi actividad"
+                        detalle="Todo lo que hiciste en el portal y en la app"
+                        alTocar={() => navigation.navigate("Activity")}
+                    />
+                    <Fila
+                        icono="calculator-outline"
+                        texto="Calculadora de indemnización"
+                        alTocar={() => navigation.navigate("Calculator")}
+                    />
+                    <Fila
+                        icono="logo-whatsapp"
+                        texto="Ayuda por WhatsApp"
+                        detalle={CONTACTO.telefono}
+                        alTocar={() => Linking.openURL(CONTACTO.whatsapp)}
+                    />
+                    <Fila
+                        icono="mail-outline"
+                        texto="Escribinos un mail"
+                        detalle={CONTACTO.email}
+                        alTocar={() => Linking.openURL(`mailto:${CONTACTO.email}`)}
+                    />
+                    <Fila
+                        icono="call-outline"
+                        texto="Llamanos"
+                        detalle={CONTACTO.telefono}
+                        alTocar={() => Linking.openURL(`tel:${CONTACTO.telefono.replace(/[\s-]/g, "")}`)}
+                    />
+                    <Fila
+                        icono="document-text-outline"
+                        texto="Términos y condiciones"
+                        alTocar={() => web("https://legalistas.ar/terminos-condiciones", "Términos y Condiciones")}
+                    />
+                    <Fila
+                        icono="shield-checkmark-outline"
+                        texto="Política de privacidad"
+                        alTocar={() => web("https://legalistas.ar/politica-privacidad", "Política de Privacidad")}
+                    />
+                </View>
+            </View>
+
+            {perfil ? <EliminarCuenta perfil={perfil} /> : null}
+
+            <Text className="text-center text-sm text-texto-tenue">
+                Versión {Constants.expoConfig?.version ?? "1.0.0"}
+            </Text>
+        </View>
+    );
+}
+
+/** Fila de una lista de opciones (ícono, texto, detalle y flecha). */
+function Fila({
+    icono,
+    texto,
+    detalle,
+    alTocar,
+    primera,
+}: {
+    icono: NombreIcono;
+    texto: string;
+    detalle?: string;
+    alTocar: () => void;
+    primera?: boolean;
+}) {
+    return (
+        <Pressable
+            accessibilityRole="button"
+            onPress={alTocar}
+            className={`min-h-16 flex-row items-center gap-3 px-4 py-3 active:bg-superficie-2 ${primera ? "" : "border-borde border-t"}`}
+        >
+            <IconoCaja chico nombre={icono} />
+            <View className="flex-1">
+                <Text className="font-semibold text-base text-texto">{texto}</Text>
+                {detalle ? <Text className="text-sm text-texto-suave">{detalle}</Text> : null}
+            </View>
+            <Icono nombre="chevron-forward" tono="textoTenue" size={20} />
+        </Pressable>
+    );
+}
+
+// La verificación en dos pasos se pide al entrar, pero se activa desde el
+// portal web (hay que escanear un código QR con otra app del mismo teléfono).
+function DosPasos() {
+    const sesion = useSesionActual();
+    return (
+        <Tarjeta>
+            <View className="flex-row items-start gap-3">
+                <IconoCaja nombre="shield-checkmark-outline" />
+                <View className="flex-1">
+                    <Text className="font-bold text-lg text-texto">Verificación en dos pasos</Text>
+                    <Text className="text-base text-texto-suave">
+                        {sesion.data?.dosPasos
+                            ? "Está activada: al entrar te pedimos también el código de tu app autenticadora."
+                            : "Sumá un código de tu celular al entrar, para que nadie más pueda abrir tu cuenta. Se activa desde el portal web."}
+                    </Text>
+                </View>
+            </View>
+            <Boton
+                variante="secundario"
+                ancho="completo"
+                className="mt-4"
+                icono="open-outline"
+                onPress={() => Linking.openURL(`${PORTAL_URL}/cuenta?seccion=ajustes`)}
+            >
+                {sesion.data?.dosPasos ? "Administrarla en el portal web" : "Activarla en el portal web"}
+            </Boton>
+        </Tarjeta>
+    );
+}
+
+const esCelular = (ua: string | null | undefined) =>
+    /Mobile|Android|iPhone|iPad|Legalistas-App/.test(ua ?? "");
+
+function Sesiones() {
+    const sesiones = useSesiones();
+    const actual = useSesionActual();
+    const cerrar = useCerrarSesionRemota();
+    const cerrarOtras = useCerrarOtrasSesiones();
+    const lista = [...(sesiones.data ?? [])].sort(
+        (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
+    );
+
+    return (
+        <View>
+            <TituloSeccion>Sesiones abiertas</TituloSeccion>
+            <Text className="-mt-1 mb-3 text-base text-texto-suave">
+                Dispositivos donde tu cuenta está abierta ahora. Si no reconocés alguno, cerralo.
+            </Text>
+            {sesiones.isPending ? (
+                <CargandoLista filas={2} etiqueta="Cargando tus sesiones…" />
+            ) : sesiones.isError ? (
+                <ErrorCarga alReintentar={() => sesiones.refetch()} />
+            ) : (
+                <>
+                    <View className="overflow-hidden rounded-2xl border border-borde bg-superficie">
+                        {lista.map((s, i) => {
+                            const esEsta = s.token === actual.data?.token;
+                            return (
+                                <View
+                                    key={s.id}
+                                    className={`flex-row items-center gap-3 p-4 ${i ? "border-borde border-t" : ""}`}
+                                >
+                                    <IconoCaja
+                                        chico
+                                        nombre={esCelular(s.userAgent) ? "phone-portrait-outline" : "desktop-outline"}
+                                    />
+                                    <View className="flex-1">
+                                        <Text className="font-semibold text-base text-texto">
+                                            {dispositivoDe(s.userAgent ?? null) ?? "Dispositivo"}
+                                        </Text>
+                                        {esEsta ? (
+                                            <Text className="font-bold text-green-800 text-xs dark:text-green-300">
+                                                ESTE DISPOSITIVO
+                                            </Text>
+                                        ) : null}
+                                        <Text className="text-sm text-texto-tenue">
+                                            Entró el {formatoFechaHora(s.createdAt)} · activa{" "}
+                                            {haceCuanto(s.updatedAt).toLowerCase()}
+                                        </Text>
+                                    </View>
+                                    {!esEsta ? (
+                                        <Boton
+                                            variante="secundario"
+                                            tamanio="sm"
+                                            className="self-center"
+                                            cargando={cerrar.isPending && cerrar.variables === s.token}
+                                            onPress={() => cerrar.mutate(s.token)}
+                                        >
+                                            Cerrar
+                                        </Boton>
+                                    ) : null}
+                                </View>
+                            );
+                        })}
+                    </View>
+                    {lista.length > 1 ? (
+                        <Boton
+                            variante="secundario"
+                            ancho="completo"
+                            className="mt-3"
+                            cargando={cerrarOtras.isPending}
+                            onPress={() => cerrarOtras.mutate()}
+                        >
+                            Cerrar la sesión en los demás dispositivos
+                        </Boton>
+                    ) : null}
+                </>
+            )}
+        </View>
+    );
+}
+
+function UltimosIngresos() {
+    const ingresos = useUltimosIngresos();
+    return (
+        <View>
+            <TituloSeccion>Últimos ingresos</TituloSeccion>
+            {ingresos.isPending ? (
+                <CargandoLista filas={2} etiqueta="Cargando tus ingresos…" />
+            ) : ingresos.isError ? (
+                <ErrorCarga alReintentar={() => ingresos.refetch()} />
+            ) : ingresos.data.length === 0 ? (
+                <Text className="text-base text-texto-suave">Todavía no hay ingresos registrados.</Text>
+            ) : (
+                <View className="overflow-hidden rounded-2xl border border-borde bg-superficie">
+                    {ingresos.data.map((ing, i) => (
+                        <View
+                            key={ing.id}
+                            className={`flex-row items-center gap-3 px-4 py-3 ${i ? "border-borde border-t" : ""}`}
+                        >
+                            <Icono nombre="log-in-outline" tono="textoTenue" size={20} />
+                            <View className="flex-1">
+                                <Text className="font-semibold text-base text-texto">{ing.descripcion}</Text>
+                                <Text className="text-sm text-texto-tenue">
+                                    {formatoFechaHora(ing.fecha)}
+                                    {ing.dispositivo ? ` · ${ing.dispositivo}` : ""}
+                                </Text>
+                            </View>
+                        </View>
+                    ))}
+                </View>
+            )}
+        </View>
+    );
+}
+
+/** Eliminar la cuenta desde la app (App Store Guideline 5.1.1(v)). Pide confirmar dos veces. */
+function EliminarCuenta({ perfil }: { perfil: Perfil }) {
+    const eliminar = useEliminarCuenta();
+    const confirmar = () =>
+        showAlert({
+            title: "Eliminar cuenta",
+            message: `Esta acción eliminará permanentemente la cuenta de ${perfil.nombre} y todos sus datos asociados (perfil, casos, consultas y mensajes). Esta acción no se puede deshacer.\n\n¿Deseás continuar?`,
+            buttons: [
+                { text: "Cancelar", style: "cancel" },
+                {
+                    text: "Continuar",
+                    style: "destructive",
+                    onPress: () =>
+                        showAlert({
+                            title: "Confirmar eliminación",
+                            message:
+                                "Por última vez: al confirmar, tu cuenta será eliminada de forma permanente. No podrás recuperar tu información.",
+                            buttons: [
+                                { text: "Cancelar", style: "cancel" },
+                                {
+                                    text: "Eliminar cuenta",
+                                    style: "destructive",
+                                    onPress: () =>
+                                        eliminar.mutate(perfil.id, {
+                                            onSuccess: () =>
+                                                showAlert({
+                                                    title: "Cuenta eliminada",
+                                                    message: "Tu cuenta fue eliminada correctamente.",
+                                                    // Se vuelve a pedir todo: si el mail no tiene más personas, el
+                                                    // portal responde 401 y la app vuelve sola al ingreso.
+                                                    buttons: [
+                                                        { text: "OK", onPress: () => queryClient.invalidateQueries() },
+                                                    ],
+                                                }),
+                                        }),
+                                },
+                            ],
+                        }),
+                },
+            ],
+        });
+    return (
+        <Boton
+            variante="fantasma"
+            ancho="completo"
+            icono="trash-outline"
+            cargando={eliminar.isPending}
+            onPress={confirmar}
+        >
+            Eliminar mi cuenta
+        </Boton>
+    );
+}

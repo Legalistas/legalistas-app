@@ -1,458 +1,452 @@
-import React, { useState } from "react";
+import { useMutation } from "@tanstack/react-query";
+import { type Ref, useEffect, useRef, useState } from "react";
 import {
-    View,
+    KeyboardAvoidingView,
+    Linking,
+    Platform,
+    Pressable,
+    ScrollView,
+    Switch,
     Text,
     TextInput,
-    TouchableOpacity,
-    StyleSheet,
-    Image,
+    View,
 } from "react-native";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { BotonTema, FondoHero, Logo, MarcaDeAgua } from "../components/Encabezado";
+import { Boton } from "../components/ui/Boton";
+import { Campo } from "../components/ui/Campo";
+import { Icono, type NombreIcono } from "../components/ui/Icono";
+import { toast } from "../components/ui/Toast";
 import { useAuth } from "../context/AuthContext";
-import { showSimpleAlert } from "../utils/alert";
-import ApiService from "../services/ApiService";
-import { Ionicons } from "@expo/vector-icons";
-import { typography } from "../styles/typography";
+import { api, auth, ErrorApi } from "../services/portal";
+import { useColores } from "../styles/tema";
+import { CONTACTO } from "../utils/constantes";
+import { cx } from "../utils/cx";
 
-// Función para traducir mensajes del servidor
-const translateServerMessage = (message: string): string => {
-    const translations: { [key: string]: string } = {
-        "Invalid credentials": "Credenciales incorrectas",
-        "User not found": "Usuario no encontrado",
-        "Password is required": "La contraseña es requerida",
-        "Email is required": "El email es requerido",
-        "Invalid email format": "Formato de email inválido",
-        "Account locked": "Cuenta bloqueada",
-        "Too many attempts": "Demasiados intentos",
+// Ingreso SIN contraseña, igual que el portal: se escribe el mail y llega un
+// código de 6 números. Si la persona activó la verificación en dos pasos (desde
+// el portal web), después se le pide el código de su app autenticadora.
+
+const ESPERA_REENVIO = 60;
+const abrirWhatsapp = () => Linking.openURL(CONTACTO.whatsapp);
+
+export default function Login() {
+    const { login } = useAuth();
+    const insets = useSafeAreaInsets();
+    const [paso, setPaso] = useState<"email" | "codigo" | "dosPasos">("email");
+    const [email, setEmail] = useState("");
+    const [codigo, setCodigo] = useState("");
+    const [error, setError] = useState<string | null>(null);
+    // Mail que no es de un cliente (`null` si no hay aviso).
+    const [noCliente, setNoCliente] = useState<string | null>(null);
+    const [espera, setEspera] = useState(0);
+    const inputCodigo = useRef<TextInput>(null);
+
+    useEffect(() => {
+        if (espera <= 0) return;
+        const t = setTimeout(() => setEspera((s) => s - 1), 1000);
+        return () => clearTimeout(t);
+    }, [espera]);
+
+    const bienvenida = () => {
+        toast.success("¡Bienvenido/a!");
+        login();
     };
 
-    return translations[message] || message;
-};
-
-export default function Login({ navigation }: any) {
-    const [email, setEmail] = useState("");
-    const [password, setPassword] = useState("");
-    const [loading, setLoading] = useState(false);
-    const [showPassword, setShowPassword] = useState(false);
-    const [rememberMe, setRememberMe] = useState(false);
-    const { login } = useAuth();
-
-    const handleLogin = async () => {
-        if (!email || !password) {
-            showSimpleAlert("Error", "Completá todos los campos");
-            return;
-        }
-
-        setLoading(true);
-        try {
-            const response = await ApiService.login({ email, password });
-
-            if (!response.success) {
-                const errorMessage = translateServerMessage(
-                    response.error || "Error de autenticación"
-                );
-                showSimpleAlert("Error", errorMessage);
+    const pedirAcceso = useMutation({
+        mutationFn: (mail: string) => api("/acceso", { method: "POST", body: { email: mail } }),
+        meta: {
+            cargando: "Enviando el mail…",
+            exito: "Listo. Revisá tu mail.",
+            error: "No pudimos mandar el mail",
+        },
+        onSuccess: () => {
+            setPaso("codigo");
+            setCodigo("");
+            setError(null);
+            setEspera(ESPERA_REENVIO);
+            setTimeout(() => inputCodigo.current?.focus(), 50);
+        },
+        onError: (e, mail) => {
+            if (e instanceof ErrorApi && e.codigo === "NO_CLIENTE") {
+                setNoCliente(mail);
+                setError(null);
                 return;
             }
+            setError(e.message);
+        },
+    });
 
-            if (response.data) {
-                if (rememberMe) {
-                    await AsyncStorage.setItem("rememberMe", "true");
-                } else {
-                    await AsyncStorage.removeItem("rememberMe");
-                }
+    const entrar = useMutation({
+        mutationFn: (otp: string) =>
+            auth<{ twoFactorRedirect?: boolean }>("/sign-in/email-otp", {
+                method: "POST",
+                body: { email: email.trim().toLowerCase(), otp },
+            }),
+        meta: { cargando: "Entrando…", error: "No pudimos entrar" },
+        onSuccess: (respuesta) => {
+            if (!respuesta?.twoFactorRedirect) return bienvenida();
+            setPaso("dosPasos");
+            setCodigo("");
+            setError(null);
+        },
+        onError: (e) => {
+            setError(e.message);
+            setCodigo("");
+            inputCodigo.current?.focus();
+        },
+    });
 
-                await login(response.data.token, response.data.user);
-            }
-        } catch (err) {
-            console.log("Login error:", err);
-            showSimpleAlert("Error", "No se pudo conectar al servidor");
-        } finally {
-            setLoading(false);
+    const enviarEmail = () => {
+        setError(null);
+        setNoCliente(null);
+        const limpio = email.trim().toLowerCase();
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(limpio)) {
+            setError("Revisá el mail: parece que está mal escrito.");
+            return;
         }
+        pedirAcceso.mutate(limpio);
     };
 
-    const handleGoogleLogin = async () => {
-        showSimpleAlert(
-            "Próximamente",
-            "El inicio de sesión con Google estará disponible pronto"
-        );
-    };
-
-    const handleForgotPassword = () => {
-        showSimpleAlert(
-            "Próximamente",
-            "La recuperación de contraseña estará disponible pronto"
-        );
-    };
-
-    const handleSignUp = () => {
-        showSimpleAlert("Próximamente", "La función de registro estará disponible pronto");
-        // navigation.navigate("SignUp");
+    const volverAlMail = () => {
+        setPaso("email");
+        setCodigo("");
+        setError(null);
     };
 
     return (
-        <View style={styles.screen}>
-            {/* TOP (dark) */}
-            <View style={styles.topBackground}>
-                <Image
-                    source={require("../../assets/grid-bg.png")}
-                    style={styles.backgroundPattern}
-                />
-
-                <View style={styles.headerContent}>
-                    <Image
-                        source={require("../../assets/logo.png")}
-                        style={styles.logoImage}
-                    />
-
-                    <Text style={styles.title}>Iniciar sesión</Text>
-
-                    <Text style={styles.subtitle}>
-                        ¡Introduce tu email y contraseña para iniciar sesión!
-                    </Text>
-                </View>
-            </View>
-
-            {/* BOTTOM (white) + CARD */}
-            <View style={styles.bottomBackground}>
-                <View style={styles.formCard}>
-                    <View style={styles.formCardContent}>
-                        {/* GOOGLE BUTTON */}
-                        <TouchableOpacity
-                            style={styles.googleButton}
-                            onPress={handleGoogleLogin}
-                            disabled={loading}
-                            activeOpacity={0.9}
-                        >
-                            <Image
-                                source={require("../../assets/google.png")}
-                                style={styles.googleIcon}
-                            />
-                            <Text style={styles.googleButtonText}>Iniciar sesión con Google</Text>
-                        </TouchableOpacity>
-
-                        {/* DIVIDER */}
-                        <View style={styles.divider}>
-                            <View style={styles.dividerLine} />
-                            <Text style={styles.dividerText}>o</Text>
-                            <View style={styles.dividerLine} />
-                        </View>
-
-                        {/* EMAIL */}
-                        <TextInput
-                            style={styles.input}
-                            placeholder="example@gmail.com"
-                            placeholderTextColor="#999"
-                            autoCapitalize="none"
-                            keyboardType="email-address"
-                            value={email}
-                            onChangeText={setEmail}
-                            editable={!loading}
-                        />
-
-                        {/* PASSWORD */}
-                        <View style={styles.passwordContainer}>
-                            <TextInput
-                                style={styles.passwordInput}
-                                placeholder="••••••••"
-                                placeholderTextColor="#999"
-                                secureTextEntry={!showPassword}
-                                value={password}
-                                onChangeText={setPassword}
-                                editable={!loading}
-                            />
-                            <TouchableOpacity
-                                style={styles.eyeButton}
-                                onPress={() => setShowPassword(!showPassword)}
-                                disabled={loading}
-                                activeOpacity={0.8}
-                            >
-                                <Ionicons
-                                    name={showPassword ? "eye-off" : "eye"}
-                                    size={20}
-                                    color="#9CA3AF"
-                                />
-                            </TouchableOpacity>
-                        </View>
-
-                        {/* OPTIONS */}
-
-                        <View style={styles.optionsColumn}>
-                            <TouchableOpacity
-                                style={styles.checkboxContainer}
-                                onPress={() => setRememberMe(!rememberMe)}
-                                disabled={loading}
-                                activeOpacity={0.8}
-                            >
-                                <View style={[styles.checkbox, rememberMe && styles.checkboxChecked]}>
-                                    {rememberMe && <Ionicons name="checkmark" size={14} color="#fff" />}
-                                </View>
-                                <Text style={styles.checkboxLabel}>Mantenerme conectado</Text>
-                            </TouchableOpacity>
-
-                            <TouchableOpacity onPress={handleForgotPassword} disabled={loading} style={styles.forgotWrap} >
-                                <Text style={styles.forgotPassword}>¿Has olvidado tu contraseña?</Text>
-                            </TouchableOpacity>
-                        </View>
-
-                        {/* LOGIN */}
-                        <TouchableOpacity
-                            style={[styles.loginButton, loading && styles.loginButtonDisabled]}
-                            onPress={handleLogin}
-                            disabled={loading}
-                            activeOpacity={0.9}
-                        >
-                            <Text style={styles.loginButtonText}>
-                                {loading ? "Ingresando..." : "Iniciar sesión"}
-                            </Text>
-                        </TouchableOpacity>
-
-                        {/* SIGN UP */}
-                        <View style={styles.signUpContainer}>
-                            <Text style={styles.signUpText}>¿No tienes una cuenta? </Text>
-                            <TouchableOpacity onPress={handleSignUp} disabled={loading}>
-                                <Text style={styles.signUpLink}>Regístrate</Text>
-                            </TouchableOpacity>
-                        </View>
+        <KeyboardAvoidingView
+            behavior={Platform.OS === "ios" ? "padding" : undefined}
+            className="flex-1 bg-ink"
+        >
+            <View className="absolute inset-x-0 bottom-0 h-1/2 bg-superficie" />
+            <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ flexGrow: 1 }}>
+                <View
+                    className="overflow-hidden bg-ink px-7 pb-24"
+                    style={{ paddingTop: Math.max(40, insets.top + 16) }}
+                >
+                    <FondoHero />
+                    <MarcaDeAgua size={150} className="-right-4 -bottom-6" />
+                    <View className="flex-row items-center justify-between">
+                        <Logo alto={40} />
+                        <BotonTema />
                     </View>
                 </View>
+
+                <View
+                    className="-mt-12 flex-1 rounded-t-3xl bg-superficie px-6 pt-8"
+                    style={{ paddingBottom: Math.max(40, insets.bottom + 16) }}
+                >
+                    {paso === "email" ? (
+                        <>
+                            <Text className="font-semibold text-sm text-texto-marca uppercase tracking-widest">
+                                Portal de clientes
+                            </Text>
+                            <Titulo>Entrá a tu cuenta</Titulo>
+                            <Text className="mt-3 text-lg text-texto-suave">
+                                No necesitás contraseña. Escribí tu mail y te mandamos un código para entrar.
+                            </Text>
+                            <Campo
+                                className="mt-7"
+                                etiqueta="Tu mail"
+                                keyboardType="email-address"
+                                autoComplete="email"
+                                textContentType="emailAddress"
+                                autoCapitalize="none"
+                                autoCorrect={false}
+                                returnKeyType="send"
+                                placeholder="nombre@ejemplo.com"
+                                value={email}
+                                onChangeText={(valor) => {
+                                    setEmail(valor);
+                                    setNoCliente(null);
+                                }}
+                                onSubmitEditing={enviarEmail}
+                                error={error}
+                                icono="mail-outline"
+                                ayuda="El mismo mail que le diste al estudio."
+                            />
+                            {noCliente !== null ? <AvisoNoCliente email={noCliente} /> : null}
+                            <Boton
+                                tamanio="lg"
+                                ancho="completo"
+                                className="mt-6"
+                                cargando={pedirAcceso.isPending}
+                                onPress={enviarEmail}
+                            >
+                                Enviarme el código
+                            </Boton>
+                        </>
+                    ) : paso === "codigo" ? (
+                        <>
+                            <Volver texto="Usar otro mail" alTocar={volverAlMail} />
+                            <IconoGrande nombre="mail-open-outline" />
+                            <Titulo>Revisá tu mail</Titulo>
+                            <Text className="mt-3 text-lg text-texto-suave">
+                                Te mandamos a <Text className="font-bold text-texto">{email.trim()}</Text> un
+                                mail con un <Text className="font-bold text-texto">código de 6 números</Text>.
+                                Escribilo acá para entrar.
+                            </Text>
+                            <CampoCodigo
+                                ref={inputCodigo}
+                                etiqueta="Código de 6 números"
+                                valor={codigo}
+                                error={error}
+                                deshabilitado={entrar.isPending}
+                                alCambiar={(texto) => {
+                                    const solo = texto.replace(/\D/g, "").slice(0, 6);
+                                    setCodigo(solo);
+                                    setError(null);
+                                    if (solo.length === 6) entrar.mutate(solo);
+                                }}
+                            />
+                            <Boton
+                                tamanio="lg"
+                                ancho="completo"
+                                className="mt-6"
+                                cargando={entrar.isPending}
+                                disabled={codigo.length !== 6}
+                                onPress={() => entrar.mutate(codigo)}
+                            >
+                                Entrar
+                            </Boton>
+
+                            <View className="mt-6 rounded-2xl bg-superficie-2 p-4">
+                                <Text className="text-base text-texto-suave">
+                                    ¿No te llegó? Revisá las carpetas de correo no deseado y promociones. Puede
+                                    tardar un minuto. El botón «Entrar a mi cuenta» del mail abre el portal web:
+                                    para entrar a la app usá el código.
+                                </Text>
+                                <Boton
+                                    variante="secundario"
+                                    ancho="completo"
+                                    className="mt-3"
+                                    disabled={espera > 0}
+                                    cargando={pedirAcceso.isPending}
+                                    onPress={() => pedirAcceso.mutate(email.trim().toLowerCase())}
+                                >
+                                    {espera > 0 ? `Pedir otro código en ${espera} s` : "Pedir otro código"}
+                                </Boton>
+                            </View>
+                        </>
+                    ) : (
+                        <DosPasos alEntrar={bienvenida} alVolver={volverAlMail} />
+                    )}
+
+                    <View className="mt-8 items-center gap-2">
+                        <Text className="text-base text-texto-suave">¿Necesitás ayuda?</Text>
+                        <Boton variante="suave" icono="logo-whatsapp" className="self-center" onPress={abrirWhatsapp}>
+                            Escribinos por WhatsApp
+                        </Boton>
+                    </View>
+                </View>
+            </ScrollView>
+        </KeyboardAvoidingView>
+    );
+}
+
+// Segundo paso del ingreso: el código de 6 números de la app autenticadora o
+// uno de los códigos de respaldo.
+function DosPasos({ alEntrar, alVolver }: { alEntrar: () => void; alVolver: () => void }) {
+    const c = useColores();
+    const [modo, setModo] = useState<"app" | "respaldo">("app");
+    const [codigo, setCodigo] = useState("");
+    const [recordar, setRecordar] = useState(true);
+    const [error, setError] = useState<string | null>(null);
+
+    const verificar = useMutation({
+        mutationFn: (valor: string) =>
+            auth(`/two-factor/verify-${modo === "app" ? "totp" : "backup-code"}`, {
+                method: "POST",
+                body: { code: valor, trustDevice: recordar },
+            }),
+        meta: { cargando: "Verificando…", error: "No pudimos verificar el código" },
+        onSuccess: alEntrar,
+        onError: (e) => {
+            setError(e.message);
+            setCodigo("");
+        },
+    });
+
+    return (
+        <>
+            <IconoGrande nombre="shield-checkmark-outline" />
+            <Titulo>Un paso más</Titulo>
+            <Text className="mt-3 text-lg text-texto-suave">
+                {modo === "app"
+                    ? "Abrí la app de códigos en tu celular (Google Authenticator, Microsoft Authenticator…) y escribí el código de 6 números de Legalistas."
+                    : "Escribí uno de los códigos de respaldo que guardaste al activar la verificación."}
+            </Text>
+            <CampoCodigo
+                etiqueta={modo === "app" ? "Código de la app" : "Código de respaldo"}
+                numerico={modo === "app"}
+                valor={codigo}
+                error={error}
+                deshabilitado={verificar.isPending}
+                alCambiar={(texto) => {
+                    const valor = modo === "app" ? texto.replace(/\D/g, "").slice(0, 6) : texto.trim();
+                    setCodigo(valor);
+                    setError(null);
+                    if (modo === "app" && valor.length === 6) verificar.mutate(valor);
+                }}
+            />
+            <View className="mt-5 min-h-12 flex-row items-center gap-3">
+                <Text className="flex-1 text-base text-texto">Recordar este dispositivo por 30 días</Text>
+                <Switch
+                    accessibilityLabel="Recordar este dispositivo por 30 días"
+                    value={recordar}
+                    onValueChange={setRecordar}
+                    trackColor={{ false: c.bordeFuerte, true: c.brand }}
+                    ios_backgroundColor={c.bordeFuerte}
+                    thumbColor={c.blanco}
+                />
             </View>
+            <Boton
+                tamanio="lg"
+                ancho="completo"
+                className="mt-4"
+                cargando={verificar.isPending}
+                disabled={codigo.length < (modo === "app" ? 6 : 8)}
+                onPress={() => verificar.mutate(codigo)}
+            >
+                Verificar y entrar
+            </Boton>
+            <Boton
+                variante="fantasma"
+                ancho="completo"
+                className="mt-4"
+                onPress={() => {
+                    setModo(modo === "app" ? "respaldo" : "app");
+                    setCodigo("");
+                    setError(null);
+                }}
+            >
+                {modo === "app"
+                    ? "No tengo el celular: usar un código de respaldo"
+                    : "Usar el código de la app"}
+            </Boton>
+            <Boton variante="fantasma" ancho="completo" className="mt-1" onPress={alVolver}>
+                Volver a empezar
+            </Boton>
+        </>
+    );
+}
+
+function Titulo({ children }: { children: string }) {
+    return (
+        <Text accessibilityRole="header" className="mt-2 font-bold text-3xl text-texto">
+            {children}
+        </Text>
+    );
+}
+
+function IconoGrande({ nombre }: { nombre: NombreIcono }) {
+    return (
+        <View className="mt-4 mb-2 size-16 items-center justify-center rounded-2xl bg-marca-suave">
+            <Icono nombre={nombre} tono="textoMarca" size={36} />
         </View>
     );
 }
 
-const styles = StyleSheet.create({
-    screen: {
-        flex: 1,
-        backgroundColor: "#fff",
-    },
+function Volver({ texto, alTocar }: { texto: string; alTocar: () => void }) {
+    return (
+        <Pressable
+            accessibilityRole="button"
+            onPress={alTocar}
+            className="-ml-2 min-h-11 flex-row items-center gap-1 self-start rounded-full pr-4 pl-2 active:bg-superficie-2"
+        >
+            <Icono nombre="arrow-back" tono="textoMarca" size={20} />
+            <Text className="font-semibold text-base text-texto-marca">{texto}</Text>
+        </Pressable>
+    );
+}
 
-    topBackground: {
-        flex: 0.45,
-        backgroundColor: "#1C2434",
-        justifyContent: "center",
-        alignItems: "center",
-        position: "relative",
-    },
+/** Campo grande para el código (un solo campo: se puede pegar o autocompletar). */
+function CampoCodigo({
+    ref,
+    etiqueta,
+    valor,
+    alCambiar,
+    error,
+    deshabilitado,
+    numerico = true,
+}: {
+    ref?: Ref<TextInput>;
+    etiqueta: string;
+    valor: string;
+    alCambiar: (texto: string) => void;
+    error: string | null;
+    deshabilitado: boolean;
+    numerico?: boolean;
+}) {
+    const c = useColores();
+    return (
+        <>
+            <Text className="mt-7 mb-1.5 font-semibold text-base text-texto">{etiqueta}</Text>
+            <TextInput
+                ref={ref}
+                accessibilityLabel={etiqueta}
+                autoFocus
+                keyboardType={numerico ? "number-pad" : "default"}
+                autoComplete="one-time-code"
+                textContentType="oneTimeCode"
+                autoCapitalize="none"
+                autoCorrect={false}
+                maxLength={numerico ? 6 : 20}
+                value={valor}
+                onChangeText={alCambiar}
+                editable={!deshabilitado}
+                placeholder={numerico ? "······" : ""}
+                placeholderTextColor={c.textoTenue}
+                className={cx(
+                    "min-h-16 rounded-2xl border-2 bg-superficie px-4 text-center font-bold text-[32px] text-texto",
+                    numerico && "tracking-[8px]",
+                    error ? "border-red-500" : "border-borde-fuerte",
+                )}
+            />
+            {error ? (
+                <Text
+                    accessibilityRole="alert"
+                    className="mt-2 font-semibold text-base text-red-700 dark:text-red-300"
+                >
+                    {error}
+                </Text>
+            ) : null}
+        </>
+    );
+}
 
-    backgroundPattern: {
-        position: "absolute",
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        width: "100%",
-        height: "100%",
-        resizeMode: "cover",
-        opacity: 0.05,
-    },
-
-    headerContent: {
-        alignItems: "center",
-        paddingHorizontal: 20,
-    },
-
-    logoImage: {
-        width: 220,
-        height: 46,
-        resizeMode: "contain",
-        marginBottom: 26,
-    },
-
-    title: {
-        ...typography.h2,
-        color: "#FFFFFF",
-        marginBottom: 10,
-    },
-
-    subtitle: {
-        ...typography.bodySmall,
-        color: "#B8C0D9",
-        textAlign: "center",
-        lineHeight: 20,
-    },
-
-    bottomBackground: {
-        flex: 0.55,
-        backgroundColor: "#FFFFFF",
-        alignItems: "center",
-        justifyContent: "flex-start",
-    },
-
-    formCard: {
-        width: "90%",
-        backgroundColor: "#fff",
-        borderRadius: 14,
-        padding: 24,
-
-        // sombra
-        shadowColor: "#000",
-        shadowOffset: { width: 0, height: 6 },
-        shadowOpacity: 0.25,
-        shadowRadius: 8,
-        elevation: 6,
-
-        // Subir el card sin margin negativo (se mantiene flexbox)
-        transform: [{ translateY: -80 }],
-    },
-
-    formCardContent: {
-        gap: 18,
-    },
-
-    googleButton: {
-        flexDirection: "row",
-        alignItems: "center",
-        justifyContent: "center",
-        backgroundColor: "#fff",
-        borderRadius: 10,
-        paddingVertical: 14,
-        borderWidth: 1,
-        borderColor: "#E5E7EB",
-    },
-
-    googleIcon: {
-        width: 20,
-        height: 20,
-        marginRight: 10,
-    },
-
-    googleButtonText: {
-        fontSize: 15,
-        color: "#111827",
-        fontWeight: "500",
-    },
-
-    divider: {
-        flexDirection: "row",
-        alignItems: "center",
-    },
-
-    dividerLine: {
-        flex: 1,
-        height: 1,
-        backgroundColor: "#E5E7EB",
-    },
-
-    dividerText: {
-        marginHorizontal: 12,
-        color: "#9CA3AF",
-        fontSize: 14,
-    },
-
-    input: {
-        backgroundColor: "#fff",
-        borderRadius: 10,
-        paddingHorizontal: 16,
-        paddingVertical: 14,
-        borderWidth: 1,
-        borderColor: "#E5E7EB",
-        fontSize: 15,
-    },
-
-    passwordContainer: {
-        flexDirection: "row",
-        alignItems: "center",
-        backgroundColor: "#fff",
-        borderRadius: 10,
-        borderWidth: 1,
-        borderColor: "#E5E7EB",
-    },
-
-    passwordInput: {
-        flex: 1,
-        paddingHorizontal: 16,
-        paddingVertical: 14,
-        fontSize: 15,
-    },
-
-    eyeButton: {
-        padding: 12,
-    },
-
-    optionsRow: {
-        flexDirection: "row",
-        alignItems: "center",
-        justifyContent: "space-between",
-        flexWrap: "wrap",     // ✅ permite que baje a la línea de abajo
-        gap: 10,
-    },
-
-    optionsColumn: {
-        gap: 10,
-    },
-
-    forgotWrap: {
-        alignSelf: "flex-end", // ✅ queda alineado a la derecha
-    },
-
-    checkboxContainer: {
-        flexDirection: "row",
-        alignItems: "center",
-        flexShrink: 1,
-    },
-
-
-    checkbox: {
-        width: 18,
-        height: 18,
-        borderRadius: 4,
-        borderWidth: 2,
-        borderColor: "#D1D5DB",
-        marginRight: 8,
-        alignItems: "center",
-        justifyContent: "center",
-        backgroundColor: "transparent",
-    },
-
-    checkboxChecked: {
-        backgroundColor: "#09A4B5",
-        borderColor: "#09A4B5",
-    },
-
-    checkboxLabel: {
-        ...typography.caption,
-        color: "#6B7280",
-    },
-
-    forgotPassword: {
-        ...typography.caption,
-        color: "#09A4B5",
-        textDecorationLine: "underline",
-        flexShrink: 1,
-        textAlign: "right",
-    },
-
-
-    loginButton: {
-        backgroundColor: "#09A4B5",
-        borderRadius: 10,
-        paddingVertical: 16,
-        alignItems: "center",
-    },
-
-    loginButtonDisabled: {
-        opacity: 0.7,
-    },
-
-    loginButtonText: {
-        ...typography.button,
-        color: "#fff",
-    },
-
-    signUpContainer: {
-        flexDirection: "row",
-        justifyContent: "center",
-    },
-
-    signUpText: {
-        ...typography.bodySmall,
-        color: "#6B7280",
-    },
-
-    signUpLink: {
-        ...typography.bodySmall,
-        color: "#09A4B5",
-    },
-});
+/** "No sos cliente de Legalistas", con qué hacer: otro mail o consultar por WhatsApp. */
+function AvisoNoCliente({ email }: { email: string }) {
+    return (
+        <View
+            accessibilityRole="alert"
+            className="mt-4 rounded-2xl border-2 border-amber-300 bg-amber-50 p-4 dark:border-amber-700 dark:bg-amber-950"
+        >
+            <View className="flex-row gap-3">
+                <View className="size-11 items-center justify-center rounded-xl bg-amber-500">
+                    <Icono nombre="person-remove-outline" tono="blanco" />
+                </View>
+                <View className="flex-1">
+                    <Text className="font-bold text-amber-950 text-lg dark:text-amber-100">
+                        No sos cliente de Legalistas
+                    </Text>
+                    <Text className="mt-1 text-amber-900 text-base dark:text-amber-200">
+                        No encontramos ningún cliente con <Text className="font-bold">{email}</Text>. Si ya
+                        sos cliente, probá con el mail que le diste al estudio. Si querés hacernos una
+                        consulta, escribinos.
+                    </Text>
+                </View>
+            </View>
+            <Boton
+                variante="whatsapp"
+                ancho="completo"
+                className="mt-4"
+                icono="logo-whatsapp"
+                onPress={abrirWhatsapp}
+            >
+                Consultanos por WhatsApp
+            </Boton>
+        </View>
+    );
+}

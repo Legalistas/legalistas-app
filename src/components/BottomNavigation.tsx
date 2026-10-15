@@ -1,142 +1,98 @@
-import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Animated, Platform } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import type { BottomTabBarProps } from "@react-navigation/bottom-tabs";
+import { useEffect, useState } from "react";
+import { Keyboard, Linking, Pressable, Text, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { CONTACTO } from "../utils/constantes";
+import { cx } from "../utils/cx";
+import { Icono, type NombreIcono } from "./ui/Icono";
 
-interface TabConfig {
-    key: string;
-    icon: keyof typeof Ionicons.glyphMap;
-    iconOutline: keyof typeof Ionicons.glyphMap;
-    label: string;
-    activeColor: string;
-    activeBg: string;
-}
+// Barra de pestañas flotante del portal (pocas opciones y grandes), con el
+// botón de WhatsApp arriba a la derecha.
+const PESTANAS: Record<string, { texto: string; icono: NombreIcono; activo: NombreIcono }> = {
+    Home: { texto: "Inicio", icono: "home-outline", activo: "home" },
+    Cases: { texto: "Mis casos", icono: "briefcase-outline", activo: "briefcase" },
+    Resources: { texto: "Recursos", icono: "book-outline", activo: "book" },
+    Account: { texto: "Mi cuenta", icono: "person-circle-outline", activo: "person-circle" },
+};
 
-const tabs: TabConfig[] = [
-    { key: 'home', icon: 'home', iconOutline: 'home-outline', label: 'Inicio', activeColor: '#09A4B5', activeBg: '#EDE9FE' },
-    { key: 'cases', icon: 'briefcase', iconOutline: 'briefcase-outline', label: 'Casos', activeColor: '#09A4B5', activeBg: '#EDE9FE' },
-    { key: 'chat', icon: 'chatbubble-ellipses', iconOutline: 'chatbubble-ellipses-outline', label: 'Chat', activeColor: '#09A4B5', activeBg: '#FFF7ED' },
-    { key: 'calendar', icon: 'calendar', iconOutline: 'calendar-outline', label: 'Citas', activeColor: '#09A4B5', activeBg: '#FFF7ED' },
-    { key: 'settings', icon: 'settings', iconOutline: 'settings-outline', label: 'Ajustes', activeColor: '#09A4B5', activeBg: '#EDE9FE' },
-];
-
-interface BottomNavigationProps {
-    activeTab?: string;
-    onTabPress: (tab: string) => void;
-}
-
-const BottomNavigation: React.FC<BottomNavigationProps> = ({
-    activeTab = 'home',
-    onTabPress
-}) => {
-    const scaleAnims = {
-        home: React.useRef(new Animated.Value(1)).current,
-        cases: React.useRef(new Animated.Value(1)).current,
-        chat: React.useRef(new Animated.Value(1)).current,
-        calendar: React.useRef(new Animated.Value(1)).current,
-        settings: React.useRef(new Animated.Value(1)).current,
-    };
-
-    const handlePress = (tab: string) => {
-        const anim = scaleAnims[tab as keyof typeof scaleAnims];
-        if (anim) {
-            Animated.sequence([
-                Animated.spring(anim, {
-                    toValue: 0.9,
-                    useNativeDriver: true,
-                }),
-                Animated.spring(anim, {
-                    toValue: 1,
-                    friction: 4,
-                    useNativeDriver: true,
-                }),
-            ]).start();
-        }
-        onTabPress(tab);
-    };
+const BottomNavigation = ({ state, navigation }: BottomTabBarProps) => {
+    const insets = useSafeAreaInsets();
+    // Con el teclado abierto se esconde: en Android quedaría flotando arriba del teclado.
+    const [teclado, setTeclado] = useState(false);
+    useEffect(() => {
+        const abre = Keyboard.addListener("keyboardDidShow", () => setTeclado(true));
+        const cierra = Keyboard.addListener("keyboardDidHide", () => setTeclado(false));
+        return () => {
+            abre.remove();
+            cierra.remove();
+        };
+    }, []);
+    if (teclado) return null;
 
     return (
-        <View style={styles.container}>
-            <View style={styles.bottomNav}>
-                {tabs.map((tab) => {
-                    const isActive = activeTab === tab.key;
+        <View
+            pointerEvents="box-none"
+            className="absolute inset-x-3"
+            style={{ bottom: Math.max(10, insets.bottom) }}
+        >
+            <Pressable
+                onPress={() => Linking.openURL(CONTACTO.whatsapp)}
+                accessibilityRole="link"
+                accessibilityLabel="Escribinos por WhatsApp"
+                className="mb-3 size-14 items-center justify-center self-end rounded-full bg-[#16a34a] shadow-barra active:opacity-80"
+            >
+                <Icono nombre="logo-whatsapp" tono="blanco" size={28} />
+            </Pressable>
+            <View
+                accessibilityRole="tablist"
+                className="h-19 flex-row rounded-[22px] border border-borde bg-superficie px-1.5 shadow-barra"
+            >
+                {state.routes.map((route, i) => {
+                    const activo = state.index === i;
+                    const pestana = PESTANAS[route.name];
                     return (
-                        <TouchableOpacity
-                            key={tab.key}
-                            style={styles.navItem}
-                            onPress={() => handlePress(tab.key)}
-                            activeOpacity={0.7}
+                        <Pressable
+                            key={route.key}
+                            accessibilityRole="tab"
+                            accessibilityState={{ selected: activo }}
+                            accessibilityLabel={pestana.texto}
+                            onPress={() => {
+                                const evento = navigation.emit({
+                                    type: "tabPress",
+                                    target: route.key,
+                                    canPreventDefault: true,
+                                });
+                                if (!activo && !evento.defaultPrevented) navigation.navigate(route.name);
+                            }}
+                            className="flex-1 items-center justify-center"
                         >
-                            <Animated.View
-                                style={[
-                                    styles.iconContainer,
-                                    isActive && { backgroundColor: tab.activeBg },
-                                    { transform: [{ scale: scaleAnims[tab.key as keyof typeof scaleAnims] }] }
-                                ]}
+                            <View
+                                className={cx(
+                                    "items-center gap-0.5 rounded-2xl px-2 py-1.5",
+                                    activo && "bg-marca-suave",
+                                )}
                             >
-                                <Ionicons
-                                    name={isActive ? tab.icon : tab.iconOutline}
-                                    size={28}
-                                    color={isActive ? tab.activeColor : '#9CA3AF'}
+                                <Icono
+                                    nombre={activo ? pestana.activo : pestana.icono}
+                                    tono={activo ? "textoMarca" : "textoTenue"}
+                                    size={26}
                                 />
-                            </Animated.View>
-                            <Text
-                                style={[
-                                    styles.navLabel,
-                                    isActive && { color: tab.activeColor, fontWeight: '700' }
-                                ]}
-                            >
-                                {tab.label}
-                            </Text>
-                        </TouchableOpacity>
+                                <Text
+                                    numberOfLines={1}
+                                    className={cx(
+                                        "text-xs",
+                                        activo ? "font-bold text-texto-marca" : "font-medium text-texto-tenue",
+                                    )}
+                                >
+                                    {pestana.texto}
+                                </Text>
+                            </View>
+                        </Pressable>
                     );
                 })}
             </View>
         </View>
     );
 };
-
-const styles = StyleSheet.create({
-    container: {
-        position: 'absolute',
-        bottom: 24,
-        left: 16,
-        right: 16,
-        zIndex: 50,
-    },
-    bottomNav: {
-        backgroundColor: '#FFFFFF',
-        borderRadius: 32,
-        paddingHorizontal: 12,
-        paddingVertical: 12,
-        flexDirection: 'row',
-        justifyContent: 'space-around',
-        alignItems: 'center',
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 8 },
-        shadowOpacity: 0.15,
-        shadowRadius: 24,
-        elevation: 12,
-    },
-    navItem: {
-        alignItems: 'center',
-        justifyContent: 'center',
-        minWidth: 60,
-        gap: 0,
-    },
-    iconContainer: {
-        width: 40,
-        height: 40,
-        borderRadius: 18,
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: 'transparent',
-    },
-    navLabel: {
-        fontSize: 12,
-        fontWeight: '500',
-        color: '#9CA3AF',
-        marginTop: 1,
-    },
-});
 
 export default BottomNavigation;

@@ -1,4 +1,23 @@
-# Documentación del Desarrollo - Legalistas App
+# Legalistas App (clientes)
+
+> **Versión nueva (octubre de 2026).** La app tiene el diseño y las funciones del portal de
+> clientes (repo `legalistas-clientes`, usuarios.legalistas.ar) y usa su misma API:
+>
+> - **Ingreso sin contraseña:** mail + código de 6 números (y segundo paso si la persona lo activó).
+>   La sesión es la del portal; ver `src/services/portal.ts`.
+> - **Datos:** `/api/portal/*` con TanStack Query (`src/services/consultas.ts`). Los tipos, textos y
+>   formatos de `src/types/portal.ts` y `src/utils/` son copia de los del portal.
+> - **Diseño:** tokens en `global.css` (`ink`, `brand` y colores semánticos con modo oscuro) y
+>   componentes en `src/components/ui/`.
+> - **Configuración:** `EXPO_PUBLIC_PORTAL_URL` (opcional; por defecto https://usuarios.legalistas.ar).
+> - **Pruebas:** `bun run test`.
+>
+> Lo que sigue describe la versión anterior (login con contraseña contra el backend) y quedó
+> desactualizado.
+
+---
+
+## Documentación de la versión anterior
 
 ## 📱 Descripción General
 Aplicación móvil desarrollada en React Native con Expo para la gestión de casos legales. Permite a los clientes ver sus casos, consultar con abogados, y hacer seguimiento del progreso de sus trámites legales.
